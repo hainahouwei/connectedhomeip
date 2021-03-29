@@ -2,8 +2,8 @@ var NAVTREEINDEX39 =
 {
 "namespacechip_1_1ble_1_1get__adapters.html":[9,0,2,1,1],
 "namespacechip_1_1ble_1_1get__adapters.html":[10,0,1,0,1],
-"namespacechip_1_1ble_1_1library__handle.html":[10,0,1,0,2],
 "namespacechip_1_1ble_1_1library__handle.html":[9,0,2,1,2],
+"namespacechip_1_1ble_1_1library__handle.html":[10,0,1,0,2],
 "namespacechip_1_1ble_1_1scan__devices.html":[9,0,2,1,3],
 "namespacechip_1_1ble_1_1scan__devices.html":[10,0,1,0,3],
 "namespacechip_1_1ble_1_1types.html":[9,0,2,1,4],
