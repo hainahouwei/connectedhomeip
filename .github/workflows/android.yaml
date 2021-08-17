@@ -53,3 +53,9 @@ jobs:
                   yes | "$ANDROID_HOME"/tools/bin/sdkmanager --licenses
                   cd src/android/CHIPTool
                   ./gradlew build
+            - name : upload apk
+              uses: actions/upload-artifact@master
+              if: always()
+              with:
+              name: CHIPTool_apk
+              path: src/android/CHIPTool/app/build/outputs/apk/
