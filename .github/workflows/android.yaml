@@ -57,5 +57,5 @@ jobs:
               uses: actions/upload-artifact@master
               if: always()
               with:
-              name: CHIPTool_apk
-              path: src/android/CHIPTool/app/build/outputs/apk/
+                name: CHIPTool_apk
+                path: src/android/CHIPTool/app/build/outputs/apk/
