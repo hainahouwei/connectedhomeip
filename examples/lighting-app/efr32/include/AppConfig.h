@@ -21,6 +21,8 @@
 
 // ---- Lighting Example App Config ----
 
+#define APP_TASK_NAME "APP"
+
 // EFR32 WSTK Buttons
 #define PB0 0
 #define PB1 1
@@ -64,4 +66,7 @@ void appError(int err);
 
 #ifdef __cplusplus
 }
+
+#include <core/CHIPError.h>
+void appError(CHIP_ERROR error);
 #endif

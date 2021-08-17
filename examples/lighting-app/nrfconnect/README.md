@@ -22,6 +22,7 @@ into an existing CHIP network and can be controlled by this network.
 -   [Overview](#overview)
     -   [Bluetooth LE advertising](#bluetooth-le-advertising)
     -   [Bluetooth LE rendezvous](#bluetooth-le-rendezvous)
+    -   [Device Firmware Upgrade](#device-firmware-upgrade)
 -   [Requirements](#requirements)
     -   [Supported devices](#supported_devices)
 -   [Device UI](#device-ui)
@@ -32,10 +33,14 @@ into an existing CHIP network and can be controlled by this network.
     -   [Removing build artifacts](#removing-build-artifacts)
     -   [Building with release configuration](#building-with-release-configuration)
     -   [Building with Pigweed RPCs](#building-with-pigweed-rpcs)
+    -   [Building with Device Firmware Upgrade support](#building-with-device-firmware-upgrade-support)
 -   [Configuring the example](#configuring-the-example)
 -   [Flashing and debugging](#flashing-and-debugging)
+    -   [Flashing on the development kits](#nrfdks_flashing)
+    -   [Flashing on the nRF52840 Dongle](#nrf52840dongle_flashing)
 -   [Testing the example](#testing-the-example)
     -   [Testing using CHIPTool](#testing-using-chiptool)
+    -   [Testing Device Firmware Upgrade](#testing-device-firmware-upgrade)
 
 <hr>
 
@@ -61,23 +66,26 @@ default settings by pressing button manually. However, this mode does not
 guarantee that the device will be able to communicate with the CHIP controller
 and other devices.
 
+The example can be configured to use the secure bootloader and utilize it for
+performing over-the-air Device Firmware Upgrade using Bluetooth LE.
+
 ### Bluetooth LE advertising
 
 To commission the device onto a CHIP network, the device must be discoverable
-over Bluetooth LE. For security reasons, you must start Bluetooth LE advertising
-manually after powering up the device by pressing **Button 4**.
+over Bluetooth LE that starts automatically upon the device startup, but only
+for a predefined period of time (15 minutes by default). If the Bluetooth LE
+advertising times out, you can re-enable it manually using **Button 4**.
 
 ### Bluetooth LE rendezvous
 
-In CHIP, the commissioning procedure (called rendezvous) is done over Bluetooth
-LE between a CHIP device and the CHIP controller, where the controller has the
-commissioner role.
+In CHIP, the commissioning procedure is done over Bluetooth LE between a CHIP
+device and the CHIP controller, where the controller has the commissioner role.
 
 To start the rendezvous, the controller must get the commissioning information
 from the CHIP device. The data payload is encoded within a QR code, printed to
-the UART console, and shared using an NFC tag. For security reasons, you must
-start NFC tag emulation manually after powering up the device by pressing
-**Button 4**.
+the UART console, and shared using an NFC tag. NFC tag emulation starts
+automatically when Bluetooth LE advertising is started and stays enabled until
+Bluetooth LE advertising timeout expires.
 
 #### Thread provisioning
 
@@ -85,6 +93,45 @@ Last part of the rendezvous procedure, the provisioning operation involves
 sending the Thread network credentials from the CHIP controller to the CHIP
 device. As a result, device is able to join the Thread network and communicate
 with other Thread devices in the network.
+
+### Device Firmware Upgrade
+
+The example allows enabling the over-the-air Device Firmware Upgrade feature. In
+this process, the device hosting new firmware image sends the image to the CHIP
+device using Bluetooth LE transport and
+[Simple Management Protocol](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/zephyr/guides/device_mgmt/index.html#device-mgmt).
+The
+[MCUboot](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/mcuboot/index.html)
+bootloader solution then replaces the old firmware image with the new one.
+
+#### Bootloader
+
+MCUboot is a secure bootloader used for swapping firmware images of different
+versions and generating proper build output files that can be used in the device
+firmware upgrade process.
+
+The bootloader solution requires an area of flash memory to swap application
+images during the firmware upgrade. The Nordic devices use an external memory
+chip for this purpose. The memory chip communicates with the microcontroller
+through the QSPI bus.
+
+See the
+[Building with Device Firmware Upgrade support](#building-with-device-firmware-upgrade-support)
+section to learn how to change MCUboot and flash configuration in this example.
+
+#### Simple Management Protocol
+
+Simple Management Protocol (SMP) is a basic transfer encoding that is used for
+device management purposes, including application image management. SMP supports
+using different transports, such as Bluetooth LE, UDP, or serial USB/UART.
+
+In this example, the CHIP device runs the SMP Server to download the application
+update image using the Bluetooth LE transport.
+
+See the
+[Building with Device Firmware Upgrade support](#building-with-device-firmware-upgrade-support)
+section to learn how to enable SMP and use it for the DFU purpose in this
+example.
 
 <hr>
 
@@ -102,10 +149,11 @@ more information.
 
 The example supports building and running on the following devices:
 
-| Hardware platform                                                                         | Build target               | Platform image                                                                                                                                      |
-| ----------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [nRF52840 DK](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF52840-DK) | `nrf52840dk_nrf52840`      | <details><summary>nRF52840 DK</summary><img src="../../platform/nrfconnect/doc/images/nRF52840-DK_top-view-small.jpg" alt="nRF52840 DK"/></details> |
-| [nRF5340 DK](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF5340-DK)   | `nrf5340dk_nrf5340_cpuapp` | <details><summary>nRF5340 DK</summary><img src="../../platform/nrfconnect/doc/images/nRF5340-DK_top-view-small.jpg" alt="nRF5340 DK"/></details>    |
+| Hardware platform                                                                                 | Build target               | Platform image                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [nRF52840 DK](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF52840-DK)         | `nrf52840dk_nrf52840`      | <details><summary>nRF52840 DK</summary><img src="../../platform/nrfconnect/doc/images/nRF52840_DK_info-medium.jpg" alt="nRF52840 DK"/></details>        |
+| [nRF5340 DK](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF5340-DK)           | `nrf5340dk_nrf5340_cpuapp` | <details><summary>nRF5340 DK</summary><img src="../../platform/nrfconnect/doc/images/nRF5340_DK_info-medium.jpg" alt="nRF5340 DK"/></details>           |
+| [nRF52840 Dongle](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF52840-Dongle) | `nrf52840dongle_nrf52840`  | <details><summary>nRF52840 Dongle</summary><img src="../../platform/nrfconnect/doc/images/nRF52840_Dongle-medium.jpg" alt="nRF52840 Dongle"/></details> |
 
 <hr>
 
@@ -116,6 +164,15 @@ The example supports building and running on the following devices:
 This section lists the User Interface elements that you can use to control and
 monitor the state of the device. These correspond to PCB components on the
 platform image.
+
+> **Note**:
+>
+> The following Device UI elements are missing on the nRF52840 Dongle: **Button
+> 2**, **Button 3**, **Button 4**, **SEGGER J-Link USB port**, and **NFC port
+> with antenna attached**. You can collect logs from the nRF52840 Dongle using
+> the **nRF USB port** instead of the **SEGGER J-Link USB port**.
+> Functionalities associated with the remaining missing elements are
+> inaccessible.
 
 **LED 1** shows the overall state of the device and its connectivity. The
 following states are possible:
@@ -150,7 +207,10 @@ following states are possible:
     initiated.
 
 -   _Pressed for less than 3 s_ &mdash; Initiates the OTA software update
-    process. This feature is not currently supported.
+    process. This feature is disabled by default, but can be enabled by
+    following the
+    [Building with Device Firmware Upgrade support](#building-with-device-firmware-upgrade-support)
+    instruction.
 
 **Button 2** &mdash; Pressing the button once changes the lighting state to the
 opposite one.
@@ -310,13 +370,47 @@ Semiconductor's kit you own.
 
 ### Building with Pigweed RPCs
 
-The RPCs in `lighting-common/pigweed-lighting.proto` can be used to control
-various functionalities of the lighting app from a USB-connected host computer.
-To build the example with the RPC server, run the following command with
-_build-target_ replaced with the build target name of the Nordic Semiconductor's
-kit you own:
+The RPCs in `lighting-common/lighting_service/lighting_service.proto` can be
+used to control various functionalities of the lighting app from a USB-connected
+host computer. To build the example with the RPC server, run the following
+command with _build-target_ replaced with the build target name of the Nordic
+Semiconductor's kit you own:
 
     $ west build -b build-target -- -DOVERLAY_CONFIG=rpc.overlay
+
+### Building with Device Firmware Upgrade support
+
+To build the example with configuration that enables DFU, run the following
+command with _build-target_ replaced with the build target name of the Nordic
+Semiconductor's kit you own (for example `nrf52840dk_nrf52840`):
+
+    $ west build -b build-target -- -DBUILD_WITH_DFU=1
+
+#### Changing bootloader configuration
+
+To change the default MCUboot configuration, edit the `overlay-dfu_support.conf`
+overlay file that contains bootloader configuration options. The file is located
+in the `config/nrfconnect/app` directory. You can also define the desired
+options in your example's `prj.conf` file.
+
+Make sure to apply the same configuration changes in the
+`child_image/mcuboot.conf` file. This is necessary for the configuration to
+work, as the bootloader image is a separate application from the user
+application and it has its own configuration file. The contents of this file
+must be consistent with the application configuration.
+
+#### Changing flash memory settings
+
+In the default configuration, the MCUboot uses the
+[Partition Manager](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/scripts/partition_manager/partition_manager.html#partition-manager)
+to configure flash partitions used for the bootloader application image slot
+purposes. You can change these settings by defining
+[static partitions](https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/scripts/partition_manager/partition_manager.html#ug-pm-static).
+This example uses this option to define using an external flash.
+
+To modify the flash settings of your board (that is, your _build-target_, for
+example `nrf52840dk_nrf52840`), edit the `pm_static.yml` file located in the
+`configuration/build-target/` directory.
 
 <hr>
 
@@ -347,10 +441,17 @@ page.
 
 ## Flashing and debugging
 
+The flashing and debugging procedure is different for the development kits and
+the nRF52840 Dongle.
+
+<a name="nrfdks_flashing"></a>
+
+### Flashing on the development kits
+
 To flash the application to the device, use the west tool and run the following
 command from the example directory:
 
-        $ west flash
+        $ west flash --erase
 
 If you have multiple development kits connected, west will prompt you to pick
 the correct one.
@@ -359,6 +460,14 @@ To debug the application on target, run the following command from the example
 directory:
 
         $ west debug
+
+<a name="nrf52840dongle_flashing"></a>
+
+### Flashing on the nRF52840 Dongle
+
+Visit
+[Programming and Debugging nRF52840 Dongle](https://docs.zephyrproject.org/latest/boards/arm/nrf52840dongle_nrf52840/doc/index.html#programming-and-debugging)
+to read more about flashing on the nRF52840 Dongle.
 
 <hr>
 
@@ -374,3 +483,26 @@ Read the
 to see how to use [CHIPTool](../../../src/android/CHIPTool/README.md) for
 Android smartphones to commission and control the application within a
 CHIP-enabled Thread network.
+
+### Testing Device Firmware Upgrade
+
+Read the
+[DFU tutorial](../../../docs/guides/nrfconnect_examples_software_update.md) to
+see how to upgrade your device firmware.
+
+## Testing using the RPC console
+
+If the flashed device has been built with the pigweed RPCs, the RPC console can
+be used to interact with the device.
+
+Build or install the [rpc console](../../common/pigweed/rpc_console/README.md)
+
+Start the console
+
+        $ python -m chip_rpc.console --device /dev/ttyUSB0
+
+From within the console you can then invoke rpcs:
+
+        rpcs.chip.rpc.Lighting.Get()
+
+        rpcs.chip.rpc.Lighting.Set(on=True)

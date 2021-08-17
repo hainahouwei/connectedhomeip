@@ -42,66 +42,102 @@ InteractionModelEngine * InteractionModelEngine::GetInstance()
 
 CHIP_ERROR InteractionModelEngine::Init(Messaging::ExchangeManager * apExchangeMgr, InteractionModelDelegate * apDelegate)
 {
-    CHIP_ERROR err = CHIP_NO_ERROR;
-
     mpExchangeMgr = apExchangeMgr;
     mpDelegate    = apDelegate;
 
-    err = mpExchangeMgr->RegisterUnsolicitedMessageHandlerForProtocol(Protocols::InteractionModel::Id, this);
-    SuccessOrExit(err);
+    ReturnErrorOnFailure(mpExchangeMgr->RegisterUnsolicitedMessageHandlerForProtocol(Protocols::InteractionModel::Id, this));
 
-exit:
-    return err;
+    mReportingEngine.Init();
+
+    for (uint32_t index = 0; index < CHIP_IM_SERVER_MAX_NUM_PATH_GROUPS - 1; index++)
+    {
+        mClusterInfoPool[index].mpNext = &mClusterInfoPool[index + 1];
+    }
+    mClusterInfoPool[CHIP_IM_SERVER_MAX_NUM_PATH_GROUPS - 1].mpNext = nullptr;
+    mpNextAvailableClusterInfo                                      = mClusterInfoPool;
+
+    return CHIP_NO_ERROR;
 }
 
 void InteractionModelEngine::Shutdown()
 {
     for (auto & commandSender : mCommandSenderObjs)
     {
-        commandSender.Shutdown();
+        if (!commandSender.IsFree())
+        {
+            commandSender.Shutdown();
+        }
     }
 
     for (auto & commandHandler : mCommandHandlerObjs)
     {
-        commandHandler.Shutdown();
+        if (!commandHandler.IsFree())
+        {
+            commandHandler.Shutdown();
+        }
     }
 
     for (auto & readClient : mReadClients)
     {
-        readClient.Shutdown();
+        if (!readClient.IsFree())
+        {
+            readClient.Shutdown();
+        }
     }
 
     for (auto & readHandler : mReadHandlers)
     {
-        readHandler.Shutdown();
+        if (!readHandler.IsFree())
+        {
+            readHandler.Shutdown();
+        }
     }
+
+    for (auto & writeClient : mWriteClients)
+    {
+        if (!writeClient.IsFree())
+        {
+            writeClient.Shutdown();
+        }
+    }
+
+    for (auto & writeHandler : mWriteHandlers)
+    {
+        VerifyOrDie(writeHandler.IsFree());
+    }
+
+    for (uint32_t index = 0; index < CHIP_IM_SERVER_MAX_NUM_PATH_GROUPS; index++)
+    {
+        mClusterInfoPool[index].mpNext = nullptr;
+        mClusterInfoPool[index].ClearDirty();
+    }
+
+    mpNextAvailableClusterInfo = nullptr;
+
+    mpExchangeMgr->UnregisterUnsolicitedMessageHandlerForProtocol(Protocols::InteractionModel::Id);
 }
 
 CHIP_ERROR InteractionModelEngine::NewCommandSender(CommandSender ** const apCommandSender)
 {
-    CHIP_ERROR err   = CHIP_ERROR_NO_MEMORY;
     *apCommandSender = nullptr;
 
     for (auto & commandSender : mCommandSenderObjs)
     {
         if (commandSender.IsFree())
         {
-            *apCommandSender = &commandSender;
-            err              = commandSender.Init(mpExchangeMgr);
-            if (CHIP_NO_ERROR != err)
+            const CHIP_ERROR err = commandSender.Init(mpExchangeMgr, mpDelegate);
+            if (err == CHIP_NO_ERROR)
             {
-                *apCommandSender = nullptr;
-                ExitNow();
+                *apCommandSender = &commandSender;
             }
-            break;
+            return err;
         }
     }
 
-exit:
-    return err;
+    return CHIP_ERROR_NO_MEMORY;
 }
 
-CHIP_ERROR InteractionModelEngine::NewReadClient(ReadClient ** const apReadClient)
+CHIP_ERROR InteractionModelEngine::NewReadClient(ReadClient ** const apReadClient, uint64_t aAppIdentifier)
 {
     CHIP_ERROR err = CHIP_ERROR_NO_MEMORY;
 
@@ -110,7 +146,7 @@ CHIP_ERROR InteractionModelEngine::NewReadClient(ReadClient ** const apReadClien
         if (readClient.IsFree())
         {
             *apReadClient = &readClient;
-            err           = readClient.Init(mpExchangeMgr, mpDelegate);
+            err           = readClient.Init(mpExchangeMgr, mpDelegate, aAppIdentifier);
             if (CHIP_NO_ERROR != err)
             {
                 *apReadClient = nullptr;
@@ -122,8 +158,28 @@ CHIP_ERROR InteractionModelEngine::NewReadClient(ReadClient ** const apReadClien
     return err;
 }
 
-void InteractionModelEngine::OnUnknownMsgType(Messaging::ExchangeContext * apExchangeContext, const PacketHeader & aPacketHeader,
-                                              const PayloadHeader & aPayloadHeader, System::PacketBufferHandle aPayload)
+CHIP_ERROR InteractionModelEngine::NewWriteClient(WriteClientHandle & apWriteClient, uint64_t aApplicationIdentifier)
+{
+    apWriteClient.SetWriteClient(nullptr);
+
+    for (auto & writeClient : mWriteClients)
+    {
+        if (!writeClient.IsFree())
+        {
+            continue;
+        }
+
+        ReturnLogErrorOnFailure(writeClient.Init(mpExchangeMgr, mpDelegate, aApplicationIdentifier));
+        apWriteClient.SetWriteClient(&writeClient);
+        return CHIP_NO_ERROR;
+    }
+
+    return CHIP_ERROR_NO_MEMORY;
+}
+
+CHIP_ERROR InteractionModelEngine::OnUnknownMsgType(Messaging::ExchangeContext * apExchangeContext,
+                                                    const PacketHeader & aPacketHeader, const PayloadHeader & aPayloadHeader,
+                                                    System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
@@ -133,7 +189,6 @@ void InteractionModelEngine::OnUnknownMsgType(Messaging::ExchangeContext * apExc
     // err = SendStatusReport(ec, kChipProfile_Common, kStatus_UnsupportedMessage);
     // SuccessOrExit(err);
 
-    apExchangeContext->Close();
     apExchangeContext = nullptr;
 
     ChipLogFunctError(err);
@@ -143,11 +198,12 @@ void InteractionModelEngine::OnUnknownMsgType(Messaging::ExchangeContext * apExc
     {
         apExchangeContext->Abort();
     }
+    return err;
 }
 
-void InteractionModelEngine::OnInvokeCommandRequest(Messaging::ExchangeContext * apExchangeContext,
-                                                    const PacketHeader & aPacketHeader, const PayloadHeader & aPayloadHeader,
-                                                    System::PacketBufferHandle aPayload)
+CHIP_ERROR InteractionModelEngine::OnInvokeCommandRequest(Messaging::ExchangeContext * apExchangeContext,
+                                                          const PacketHeader & aPacketHeader, const PayloadHeader & aPayloadHeader,
+                                                          System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
@@ -155,9 +211,9 @@ void InteractionModelEngine::OnInvokeCommandRequest(Messaging::ExchangeContext *
     {
         if (commandHandler.IsFree())
         {
-            err = commandHandler.Init(mpExchangeMgr);
+            err = commandHandler.Init(mpExchangeMgr, mpDelegate);
             SuccessOrExit(err);
-            commandHandler.OnMessageReceived(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
+            err = commandHandler.OnInvokeCommandRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
             apExchangeContext = nullptr;
             break;
         }
@@ -170,10 +226,11 @@ exit:
     {
         apExchangeContext->Abort();
     }
+    return err;
 }
 
-void InteractionModelEngine::OnReadRequest(Messaging::ExchangeContext * apExchangeContext, const PacketHeader & aPacketHeader,
-                                           const PayloadHeader & aPayloadHeader, System::PacketBufferHandle aPayload)
+CHIP_ERROR InteractionModelEngine::OnReadRequest(Messaging::ExchangeContext * apExchangeContext, const PacketHeader & aPacketHeader,
+                                                 const PayloadHeader & aPayloadHeader, System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
@@ -185,8 +242,7 @@ void InteractionModelEngine::OnReadRequest(Messaging::ExchangeContext * apExchan
         {
             err = readHandler.Init(mpDelegate);
             SuccessOrExit(err);
-            err = readHandler.OnReadRequest(apExchangeContext, std::move(aPayload));
-            SuccessOrExit(err);
+            err               = readHandler.OnReadRequest(apExchangeContext, std::move(aPayload));
             apExchangeContext = nullptr;
             break;
         }
@@ -199,24 +255,61 @@ exit:
     {
         apExchangeContext->Abort();
     }
+    return err;
 }
 
-void InteractionModelEngine::OnMessageReceived(Messaging::ExchangeContext * apExchangeContext, const PacketHeader & aPacketHeader,
-                                               const PayloadHeader & aPayloadHeader, System::PacketBufferHandle aPayload)
+CHIP_ERROR InteractionModelEngine::OnWriteRequest(Messaging::ExchangeContext * apExchangeContext,
+                                                  const PacketHeader & aPacketHeader, const PayloadHeader & aPayloadHeader,
+                                                  System::PacketBufferHandle && aPayload)
 {
+    CHIP_ERROR err = CHIP_NO_ERROR;
+
+    ChipLogDetail(DataManagement, "Receive Write request");
+
+    for (auto & writeHandler : mWriteHandlers)
+    {
+        if (writeHandler.IsFree())
+        {
+            err = writeHandler.Init(mpDelegate);
+            SuccessOrExit(err);
+            err               = writeHandler.OnWriteRequest(apExchangeContext, std::move(aPayload));
+            apExchangeContext = nullptr;
+            break;
+        }
+    }
+
+exit:
+    ChipLogFunctError(err);
+
+    if (nullptr != apExchangeContext)
+    {
+        apExchangeContext->Abort();
+    }
+    return err;
+}
+
+CHIP_ERROR InteractionModelEngine::OnMessageReceived(Messaging::ExchangeContext * apExchangeContext,
+                                                     const PacketHeader & aPacketHeader, const PayloadHeader & aPayloadHeader,
+                                                     System::PacketBufferHandle && aPayload)
+{
+    CHIP_ERROR err = CHIP_NO_ERROR;
     if (aPayloadHeader.HasMessageType(Protocols::InteractionModel::MsgType::InvokeCommandRequest))
     {
-
-        OnInvokeCommandRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
+        err = OnInvokeCommandRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
     }
     else if (aPayloadHeader.HasMessageType(Protocols::InteractionModel::MsgType::ReadRequest))
     {
-        OnReadRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
+        err = OnReadRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
+    }
+    else if (aPayloadHeader.HasMessageType(Protocols::InteractionModel::MsgType::WriteRequest))
+    {
+        err = OnWriteRequest(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
     }
     else
     {
-        OnUnknownMsgType(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
+        err = OnUnknownMsgType(apExchangeContext, aPacketHeader, aPayloadHeader, std::move(aPayload));
     }
+    return err;
 }
 
 void InteractionModelEngine::OnResponseTimeout(Messaging::ExchangeContext * ec)
@@ -224,22 +317,67 @@ void InteractionModelEngine::OnResponseTimeout(Messaging::ExchangeContext * ec)
     ChipLogProgress(DataManagement, "Time out! failed to receive echo response from Exchange: %d", ec->GetExchangeId());
 }
 
-// The default implementation to make compiler happy before codegen for this is ready.
-// TODO: Remove this after codegen is ready.
-void __attribute__((weak))
-DispatchSingleClusterCommand(chip::ClusterId aClusterId, chip::CommandId aCommandId, chip::EndpointId aEndPointId,
-                             chip::TLV::TLVReader & aReader, Command * apCommandObj)
+CHIP_ERROR InteractionModelEngine::SendReadRequest(NodeId aNodeId, FabricIndex aFabricIndex, SecureSessionHandle * apSecureSession,
+                                                   EventPathParams * apEventPathParamsList, size_t aEventPathParamsListSize,
+                                                   AttributePathParams * apAttributePathParamsList,
+                                                   size_t aAttributePathParamsListSize, EventNumber aEventNumber,
+                                                   uint64_t aAppIdentifier)
 {
-    ChipLogDetail(DataManagement, "Received Cluster Command: Cluster=%" PRIx16 " Command=%" PRIx8 " Endpoint=%" PRIx8, aClusterId,
-                  aCommandId, aEndPointId);
-    ChipLogError(
-        DataManagement,
-        "Default DispatchSingleClusterCommand is called, this should be replaced by actual dispatched for cluster commands");
+    ReadClient * client = nullptr;
+    CHIP_ERROR err      = CHIP_NO_ERROR;
+    ReturnErrorOnFailure(NewReadClient(&client, aAppIdentifier));
+    err = client->SendReadRequest(aNodeId, aFabricIndex, apSecureSession, apEventPathParamsList, aEventPathParamsListSize,
+                                  apAttributePathParamsList, aAttributePathParamsListSize, aEventNumber);
+    if (err != CHIP_NO_ERROR)
+    {
+        client->Shutdown();
+    }
+    return err;
 }
 
 uint16_t InteractionModelEngine::GetReadClientArrayIndex(const ReadClient * const apReadClient) const
 {
     return static_cast<uint16_t>(apReadClient - mReadClients);
 }
+
+uint16_t InteractionModelEngine::GetWriteClientArrayIndex(const WriteClient * const apWriteClient) const
+{
+    return static_cast<uint16_t>(apWriteClient - mWriteClients);
+}
+
+void InteractionModelEngine::ReleaseClusterInfoList(ClusterInfo *& aClusterInfo)
+{
+    ClusterInfo * lastClusterInfo = aClusterInfo;
+    if (lastClusterInfo == nullptr)
+    {
+        return;
+    }
+
+    while (lastClusterInfo != nullptr && lastClusterInfo->mpNext != nullptr)
+    {
+        lastClusterInfo->ClearDirty();
+        lastClusterInfo = lastClusterInfo->mpNext;
+    }
+    lastClusterInfo->ClearDirty();
+    lastClusterInfo->mFlags.ClearAll();
+    lastClusterInfo->mpNext    = mpNextAvailableClusterInfo;
+    mpNextAvailableClusterInfo = aClusterInfo;
+    aClusterInfo               = nullptr;
+}
+
+CHIP_ERROR InteractionModelEngine::PushFront(ClusterInfo *& aClusterInfoList, ClusterInfo & aClusterInfo)
+{
+    ClusterInfo * last = aClusterInfoList;
+    if (mpNextAvailableClusterInfo == nullptr)
+    {
+        return CHIP_ERROR_NO_MEMORY;
+    }
+    aClusterInfoList           = mpNextAvailableClusterInfo;
+    mpNextAvailableClusterInfo = mpNextAvailableClusterInfo->mpNext;
+    *aClusterInfoList          = aClusterInfo;
+    aClusterInfoList->mpNext   = last;
+    return CHIP_NO_ERROR;
+}
+
 } // namespace app
 } // namespace chip

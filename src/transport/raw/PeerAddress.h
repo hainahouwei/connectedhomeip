@@ -43,7 +43,11 @@ namespace Transport {
  * will keep the same TCP channel.
  *
  */
-enum class Type
+
+/**
+ * Here we specified Type to be uint8_t, so the PeerAddress can be serialized easily.
+ */
+enum class Type : uint8_t
 {
     kUndefined,
     kUdp,
@@ -166,10 +170,14 @@ public:
     }
     static PeerAddress TCP(const Inet::IPAddress & addr) { return PeerAddress(addr, Type::kTcp); }
     static PeerAddress TCP(const Inet::IPAddress & addr, uint16_t port) { return TCP(addr).SetPort(port); }
+    static PeerAddress TCP(const Inet::IPAddress & addr, uint16_t port, Inet::InterfaceId interface)
+    {
+        return TCP(addr).SetPort(port).SetInterface(interface);
+    }
 
 private:
-    Inet::IPAddress mIPAddress;
-    Type mTransportType;
+    Inet::IPAddress mIPAddress   = {};
+    Type mTransportType          = Type::kUndefined;
     uint16_t mPort               = CHIP_PORT; ///< Relevant for UDP data sending.
     Inet::InterfaceId mInterface = INET_NULL_INTERFACEID;
 };

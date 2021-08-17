@@ -41,7 +41,7 @@ choose the pairing mode.
 The command below pair a device with the provided IP address and port of the
 server to talk to.
 
-    $ chip-tool pairing bypass 192.168.0.30 11097
+    $ chip-tool pairing bypass 192.168.0.30 5540
 
 #### Pair a device over BLE
 
@@ -51,7 +51,7 @@ remote device.
 The command below uses the default values hard-coded into the debug versions of
 the ESP32 all-clusters-app:
 
-    $ chip-tool pairing ble 12345678 3840
+    $ chip-tool pairing ble 20202021 3840
 
 ### Unpair a device
 
@@ -132,11 +132,11 @@ and the `parse-setup-payload` command
 
 #### QR Code
 
-    $ chip-tool payload parse-setup-payload "CH:#####"
+    $ chip-tool payload parse-setup-payload "MT:#####"
 
 #### QR Code with optional Vendor Info
 
-    $ chip-tool payload parse-setup-payload "CH:#####"
+    $ chip-tool payload parse-setup-payload "MT:#####"
 
 #### Manual Setup Code
 

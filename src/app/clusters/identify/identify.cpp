@@ -47,13 +47,14 @@
 #include "identify.h"
 
 // this file contains all the common includes for clusters in the util
+#include <app/CommandHandler.h>
+#include <app/common/gen/attribute-id.h>
+#include <app/common/gen/attribute-type.h>
+#include <app/common/gen/cluster-id.h>
+#include <app/common/gen/command-id.h>
 #include <app/util/af.h>
 #include <app/util/common.h>
-
-#include "gen/attribute-id.h"
-#include "gen/attribute-type.h"
-#include "gen/cluster-id.h"
-#include "gen/command-id.h"
+#include <support/CodeUtils.h>
 
 using namespace chip;
 
@@ -73,8 +74,8 @@ static EmAfIdentifyState * getIdentifyState(EndpointId endpoint);
 
 static EmAfIdentifyState * getIdentifyState(EndpointId endpoint)
 {
-    uint8_t ep = emberAfFindClusterServerEndpointIndex(endpoint, ZCL_IDENTIFY_CLUSTER_ID);
-    return (ep == 0xFF ? NULL : &stateTable[ep]);
+    uint16_t ep = emberAfFindClusterServerEndpointIndex(endpoint, ZCL_IDENTIFY_CLUSTER_ID);
+    return (ep == 0xFFFF ? NULL : &stateTable[ep]);
 }
 
 void emberAfIdentifyClusterServerInitCallback(EndpointId endpoint)
@@ -102,9 +103,9 @@ void emberAfIdentifyClusterServerAttributeChangedCallback(EndpointId endpoint, A
     }
 }
 
-bool emberAfIdentifyClusterIdentifyCallback(uint16_t time)
+bool emberAfIdentifyClusterIdentifyCallback(EndpointId endpoint, app::CommandHandler * commandObj, uint16_t time)
 {
-    EmberStatus sendStatus;
+    EmberStatus sendStatus = EMBER_SUCCESS;
     // This Identify callback writes the new attribute, which will trigger the
     // Attribute Changed callback above, which in turn will schedule or cancel the
     // tick.  Because of this, the tick does not have to be scheduled here.
@@ -119,11 +120,12 @@ bool emberAfIdentifyClusterIdentifyCallback(uint16_t time)
     return true;
 }
 
-bool emberAfIdentifyClusterIdentifyQueryCallback(void)
+bool emberAfIdentifyClusterIdentifyQueryCallback(EndpointId endpoint, app::CommandHandler * commandObj)
 {
     EmberAfStatus status;
-    EmberStatus sendStatus;
+    EmberStatus sendStatus = EMBER_SUCCESS;
     uint16_t identifyTime;
+    CHIP_ERROR err = CHIP_NO_ERROR;
 
     emberAfIdentifyClusterPrintln("RX identify:QUERY");
 
@@ -153,12 +155,23 @@ bool emberAfIdentifyClusterIdentifyQueryCallback(void)
     }
 
     emberAfIdentifyClusterPrintln("Identifying for %d more seconds", identifyTime);
-    emberAfFillExternalBuffer((ZCL_CLUSTER_SPECIFIC_COMMAND | ZCL_FRAME_CONTROL_SERVER_TO_CLIENT), ZCL_IDENTIFY_CLUSTER_ID,
-                              ZCL_IDENTIFY_QUERY_RESPONSE_COMMAND_ID, "v", identifyTime);
-    sendStatus = emberAfSendResponse();
-    if (EMBER_SUCCESS != sendStatus)
     {
-        emberAfIdentifyClusterPrintln("Identify: failed to send %s response: 0x%x", "query", sendStatus);
+        app::CommandPathParams cmdParams = { emberAfCurrentEndpoint(), /* group id */ 0, ZCL_IDENTIFY_CLUSTER_ID,
+                                             ZCL_IDENTIFY_QUERY_RESPONSE_COMMAND_ID, (app::CommandPathFlags::kEndpointIdValid) };
+        TLV::TLVWriter * writer          = nullptr;
+
+        VerifyOrExit(commandObj != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
+
+        SuccessOrExit(err = commandObj->PrepareCommand(cmdParams));
+        VerifyOrExit((writer = commandObj->GetCommandDataElementTLVWriter()) != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
+        SuccessOrExit(err = writer->Put(TLV::ContextTag(0), identifyTime));
+        SuccessOrExit(err = commandObj->FinishCommand());
+    }
+
+exit:
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(Zcl, "Failed to encode response command.");
     }
     return true;
 }

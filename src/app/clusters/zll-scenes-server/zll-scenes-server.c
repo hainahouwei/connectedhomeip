@@ -54,27 +54,30 @@
 
 #include "../../include/af.h"
 #include "../scenes/scenes.h"
+#include <app/CommandHandler.h>
+
+using namespace chip;
 
 #define ZCL_SCENES_CLUSTER_MODE_COPY_ALL_SCENES_MASK EMBER_BIT(0)
 
-bool emberAfScenesClusterEnhancedAddSceneCallback(uint16_t groupId, uint8_t sceneId, uint16_t transitionTime, uint8_t * sceneName,
-                                                  uint8_t * extensionFieldSets)
+bool emberAfScenesClusterEnhancedAddSceneCallback(app::CommandHandler * commandObj, uint16_t groupId, uint8_t sceneId,
+                                                  uint16_t transitionTime, uint8_t * sceneName, uint8_t * extensionFieldSets)
 {
     return emberAfPluginScenesServerParseAddScene(emberAfCurrentCommand(), groupId, sceneId, transitionTime, sceneName,
                                                   extensionFieldSets);
 }
 
-bool emberAfScenesClusterEnhancedViewSceneCallback(uint16_t groupId, uint8_t sceneId)
+bool emberAfScenesClusterEnhancedViewSceneCallback(app::CommandHandler * commandObj, uint16_t groupId, uint8_t sceneId)
 {
     return emberAfPluginScenesServerParseViewScene(emberAfCurrentCommand(), groupId, sceneId);
 }
 
-bool emberAfScenesClusterCopySceneCallback(uint8_t mode, uint16_t groupIdFrom, uint8_t sceneIdFrom, uint16_t groupIdTo,
-                                           uint8_t sceneIdTo)
+bool emberAfScenesClusterCopySceneCallback(app::CommandHandler * commandObj, uint8_t mode, uint16_t groupIdFrom,
+                                           uint8_t sceneIdFrom, uint16_t groupIdTo, uint8_t sceneIdTo)
 {
-    EmberStatus sendStatus;
-    EmberAfStatus status = EMBER_ZCL_STATUS_INVALID_FIELD;
-    bool copyAllScenes   = (mode & ZCL_SCENES_CLUSTER_MODE_COPY_ALL_SCENES_MASK);
+    EmberStatus sendStatus = EMBER_SUCCESS;
+    EmberAfStatus status   = EMBER_ZCL_STATUS_INVALID_FIELD;
+    bool copyAllScenes     = (mode & ZCL_SCENES_CLUSTER_MODE_COPY_ALL_SCENES_MASK);
     uint8_t i;
 
     emberAfScenesClusterPrintln("RX: CopyScene 0x%x, 0x%2x, 0x%x, 0x%2x, 0x%x", mode, groupIdFrom, sceneIdFrom, groupIdTo,

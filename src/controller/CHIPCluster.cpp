@@ -24,7 +24,10 @@
  *    the CHIP device.
  */
 
+#include <app/InteractionModelEngine.h>
 #include <controller/CHIPCluster.h>
+#include <protocols/temp_zcl/TempZCL.h>
+#include <support/CodeUtils.h>
 
 namespace chip {
 namespace Controller {
@@ -36,6 +39,7 @@ CHIP_ERROR ClusterBase::Associate(Device * device, EndpointId endpoint)
 
     mDevice   = device;
     mEndpoint = endpoint;
+
     return err;
 }
 
@@ -44,26 +48,33 @@ void ClusterBase::Dissociate()
     mDevice = nullptr;
 }
 
-CHIP_ERROR ClusterBase::SendCommand(uint8_t seqNum, chip::System::PacketBufferHandle payload,
+CHIP_ERROR ClusterBase::SendCommand(uint8_t seqNum, chip::System::PacketBufferHandle && payload,
                                     Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
+    Messaging::SendFlags sendFlags;
 
     VerifyOrExit(mDevice != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
     VerifyOrExit(!payload.IsNull(), err = CHIP_ERROR_INTERNAL);
-
-    err = mDevice->SendMessage(std::move(payload));
-    SuccessOrExit(err);
 
     if (onSuccessCallback != nullptr || onFailureCallback != nullptr)
     {
         mDevice->AddResponseHandler(seqNum, onSuccessCallback, onFailureCallback);
     }
 
+    if (onSuccessCallback != nullptr || onFailureCallback != nullptr)
+    {
+        sendFlags.Set(Messaging::SendMessageFlags::kExpectResponse);
+    }
+
+    err = mDevice->SendMessage(Protocols::TempZCL::MsgType::TempZCLRequest, sendFlags, std::move(payload));
+    SuccessOrExit(err);
+
 exit:
     if (err != CHIP_NO_ERROR)
     {
-        ChipLogError(Controller, "Failed in sending cluster command. Err %d", err);
+        ChipLogError(Controller, "Failed in sending cluster command. Err %" CHIP_ERROR_FORMAT, err.Format());
+        mDevice->CancelResponseHandler(seqNum);
     }
 
     return err;
@@ -71,13 +82,10 @@ exit:
 
 CHIP_ERROR ClusterBase::RequestAttributeReporting(AttributeId attributeId, Callback::Cancelable * onReportCallback)
 {
-    CHIP_ERROR err = CHIP_NO_ERROR;
-
-    VerifyOrExit(onReportCallback != nullptr, err = CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(onReportCallback != nullptr, CHIP_ERROR_INVALID_ARGUMENT);
     mDevice->AddReportHandler(mEndpoint, mClusterId, attributeId, onReportCallback);
 
-exit:
-    return err;
+    return CHIP_NO_ERROR;
 }
 
 } // namespace Controller

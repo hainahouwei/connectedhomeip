@@ -21,7 +21,6 @@
 // ================================================================================
 
 #include "openthread/platform/logging.h"
-#include "openthread/platform/uart.h"
 #include <mbedtls/platform.h>
 #include <openthread-system.h>
 #include <openthread/cli.h>
@@ -32,6 +31,7 @@
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/ThreadStackManager.h>
 #include <support/CHIPMem.h>
+#include <support/CHIPPlatformMemory.h>
 #include <support/logging/CHIPLogging.h>
 
 #include "FreeRtosMbedtlsUtils.h"
@@ -44,8 +44,6 @@ using namespace ::chip::Inet;
 using namespace ::chip::DeviceLayer;
 using namespace ::chip::Logging;
 
-extern "C" void * pvPortCallocRtos(size_t num, size_t size);
-
 #include <AppTask.h>
 
 typedef void (*InitFunc)(void);
@@ -57,8 +55,6 @@ uint8_t __attribute__((section(".heap"))) ucHeap[0xF000];
 
 extern "C" void main_task(void const * argument)
 {
-    CHIP_ERROR ret = CHIP_ERROR_MAX;
-
     /* Call C++ constructors */
     InitFunc * pFunc = &__init_array_start;
     for (; pFunc < &__init_array_end; ++pFunc)
@@ -66,15 +62,10 @@ extern "C" void main_task(void const * argument)
         (*pFunc)();
     }
 
-    mbedtls_platform_set_calloc_free(pvPortCallocRtos, vPortFree);
+    mbedtls_platform_set_calloc_free(CHIPPlatformMemoryCalloc, CHIPPlatformMemoryFree);
 
     /* Used for HW initializations */
     otSysInit(0, NULL);
-
-    /* UART needs to be enabled so early for getting the Weave Init Logs.
-     * Otherwise, some logs are lost because the UART gets enabled later
-     * during the initialization of the Thread stack */
-    otPlatUartEnable();
 
     K32W_LOG("Welcome to NXP Lighting Demo App");
 
@@ -85,7 +76,7 @@ extern "C" void main_task(void const * argument)
     // Init Chip memory management before the stack
     chip::Platform::MemoryInit();
 
-    ret = PlatformMgr().InitChipStack();
+    CHIP_ERROR ret = PlatformMgr().InitChipStack();
     if (ret != CHIP_NO_ERROR)
     {
         K32W_LOG("Error during PlatformMgr().InitWeaveStack()");
@@ -99,25 +90,10 @@ extern "C" void main_task(void const * argument)
         goto exit;
     }
 
-    ret = ConnectivityMgr().SetThreadDeviceType(ConnectivityManager::kThreadDeviceType_SleepyEndDevice);
+    ret = ConnectivityMgr().SetThreadDeviceType(ConnectivityManager::kThreadDeviceType_MinimalEndDevice);
     if (ret != CHIP_NO_ERROR)
     {
         goto exit;
-    }
-
-    // Configure the Thread polling behavior for the device.
-    {
-        ConnectivityManager::ThreadPollingConfig pollingConfig;
-        pollingConfig.Clear();
-        pollingConfig.ActivePollingIntervalMS   = THREAD_ACTIVE_POLLING_INTERVAL_MS;
-        pollingConfig.InactivePollingIntervalMS = THREAD_INACTIVE_POLLING_INTERVAL_MS;
-
-        ret = ConnectivityMgr().SetThreadPollingConfig(pollingConfig);
-        if (ret != CHIP_NO_ERROR)
-        {
-            K32W_LOG("Error during ConnectivityMgr().SetThreadPollingConfig(pollingConfig)");
-            goto exit;
-        }
     }
 
     ret = PlatformMgr().StartEventLoopTask();

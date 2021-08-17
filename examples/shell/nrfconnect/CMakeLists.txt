@@ -27,6 +27,8 @@ find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
 
 project(chip-nrfconnect-shell-example)
 
+include(${CHIP_ROOT}/config/nrfconnect/app/enable-gnu-std.cmake)
+
 target_compile_options(app PRIVATE -Werror)
 
 target_include_directories(app PRIVATE
@@ -34,12 +36,11 @@ target_include_directories(app PRIVATE
                            ${APP_ROOT}/shell_common/include)
 
 target_sources(app PRIVATE
-    ${APP_ROOT}/shell_common/cmd_base64.cpp
-    ${APP_ROOT}/shell_common/cmd_device.cpp
+    ${APP_ROOT}/shell_common/globals.cpp
     ${APP_ROOT}/shell_common/cmd_misc.cpp
     ${APP_ROOT}/shell_common/cmd_otcli.cpp
-    ${APP_ROOT}/shell_common/cmd_ping.cpp    
-    ${APP_ROOT}/shell_common/cmd_btp.cpp
+    ${APP_ROOT}/shell_common/cmd_ping.cpp
+    ${APP_ROOT}/shell_common/cmd_send.cpp     
     ${APP_ROOT}/standalone/main.cpp
 )
 
@@ -52,3 +53,5 @@ if(CONFIG_OPENTHREAD_FTD)
 elseif(CONFIG_OPENTHREAD_MTD)
     target_link_libraries(app INTERFACE openthread-cli-mtd)
 endif()
+
+include(${CHIP_ROOT}/config/nrfconnect/app/flashing.cmake)

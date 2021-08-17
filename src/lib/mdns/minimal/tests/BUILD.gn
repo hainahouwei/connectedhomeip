@@ -22,14 +22,20 @@ chip_test_suite("tests") {
   output_name = "libMinimalMdnstests"
 
   test_sources = [
+    "TestMinimalMdnsAllocator.cpp",
     "TestQueryReplyFilter.cpp",
     "TestRecordData.cpp",
+    "TestResponseSender.cpp",
   ]
+  if (chip_mdns == "minimal") {
+    test_sources += [ "TestAdvertiser.cpp" ]
+  }
 
   cflags = [ "-Wconversion" ]
 
   public_deps = [
     "${chip_root}/src/lib/core",
+    "${chip_root}/src/lib/mdns",
     "${chip_root}/src/lib/mdns/minimal",
     "${nlunit_test_root}:nlunit-test",
   ]

@@ -42,10 +42,10 @@
 #pragma once
 
 //#include PLATFORM_HEADER
-#include "af.h"
+#include <app/util/af.h>
 
 #if !defined(EMBER_SCRIPTED_TEST)
-#include "gen/att-storage.h"
+#include <app/common/gen/att-storage.h>
 #endif
 
 #if !defined(ATTRIBUTE_STORAGE_CONFIGURATION) && defined(EMBER_TEST)
@@ -65,8 +65,37 @@
 
 // If we have fixed number of endpoints, then max is the same.
 #ifdef FIXED_ENDPOINT_COUNT
+#ifdef DYNAMIC_ENDPOINT_COUNT
+#define MAX_ENDPOINT_COUNT (FIXED_ENDPOINT_COUNT + DYNAMIC_ENDPOINT_COUNT)
+#else
 #define MAX_ENDPOINT_COUNT FIXED_ENDPOINT_COUNT
 #endif
+#endif
+
+#include <app/common/gen/attribute-type.h>
+
+#define DECLARE_DYNAMIC_ENDPOINT(endpointName, clusterList)                                                                        \
+    EmberAfEndpointType endpointName = { clusterList, sizeof(clusterList) / sizeof(EmberAfCluster), 0 }
+
+#define DECLARE_DYNAMIC_CLUSTER_LIST_BEGIN(clusterListName) EmberAfCluster clusterListName[] = {
+
+#define DECLARE_DYNAMIC_CLUSTER(clusterId, clusterAttrs)                                                                           \
+    {                                                                                                                              \
+        clusterId, clusterAttrs, sizeof(clusterAttrs) / sizeof(EmberAfAttributeMetadata), 0, ZAP_CLUSTER_MASK(SERVER), NULL        \
+    }
+
+#define DECLARE_DYNAMIC_CLUSTER_LIST_END }
+
+#define DECLARE_DYNAMIC_ATTRIBUTE_LIST_BEGIN(attrListName) EmberAfAttributeMetadata attrListName[] = {
+
+#define DECLARE_DYNAMIC_ATTRIBUTE_LIST_END(clusterRevision)                                                                        \
+    , { 0xFFFD, ZAP_TYPE(INT16U), 2, 0, ZAP_SIMPLE_DEFAULT(clusterRevision) } /* cluster revision */                               \
+    }
+
+#define DECLARE_DYNAMIC_ATTRIBUTE(attId, attType, attSizeBytes, attrMask)                                                          \
+    {                                                                                                                              \
+        attId, ZAP_TYPE(attType), attSizeBytes, attrMask | ZAP_ATTRIBUTE_MASK(EXTERNAL_STORAGE), ZAP_EMPTY_DEFAULT()               \
+    }
 
 #define CLUSTER_TICK_FREQ_ALL (0x00)
 #define CLUSTER_TICK_FREQ_QUARTER_SECOND (0x04)
@@ -94,7 +123,7 @@ bool emberAfExtractCommandIds(bool outgoing, EmberAfClusterCommand * cmd, chip::
                               uint16_t bufferLength, uint16_t * bufferIndex, uint8_t startId, uint8_t maxIdCount);
 
 EmberAfStatus emAfReadOrWriteAttribute(EmberAfAttributeSearchRecord * attRecord, EmberAfAttributeMetadata ** metadata,
-                                       uint8_t * buffer, uint16_t readLength, bool write);
+                                       uint8_t * buffer, uint16_t readLength, bool write, int32_t index = -1);
 
 bool emAfMatchCluster(EmberAfCluster * cluster, EmberAfAttributeSearchRecord * attRecord);
 bool emAfMatchAttribute(EmberAfCluster * cluster, EmberAfAttributeMetadata * am, EmberAfAttributeSearchRecord * attRecord);
@@ -176,25 +205,26 @@ void emAfClusterAttributeChangedCallback(chip::EndpointId endpoint, chip::Cluste
 // Calls the attribute changed callback for a specific cluster.
 EmberAfStatus emAfClusterPreAttributeChangedCallback(chip::EndpointId endpoint, chip::ClusterId clusterId,
                                                      chip::AttributeId attributeId, uint8_t clientServerMask,
-                                                     uint16_t manufacturerCode, EmberAfAttributeType attributeType, uint8_t size,
+                                                     uint16_t manufacturerCode, EmberAfAttributeType attributeType, uint16_t size,
                                                      uint8_t * value);
 
 // Calls the default response callback for a specific cluster, and wraps emberAfClusterDefaultResponseWithMfgCodeCallback
 // with the EMBER_NULL_MANUFACTURER_CODE
-void emberAfClusterDefaultResponseCallback(chip::EndpointId endpoint, chip::ClusterId clusterId, uint8_t commandId,
+void emberAfClusterDefaultResponseCallback(chip::EndpointId endpoint, chip::ClusterId clusterId, chip::CommandId commandId,
                                            EmberAfStatus status, uint8_t clientServerMask);
 
 // Calls the default response callback for a specific cluster.
-void emberAfClusterDefaultResponseWithMfgCodeCallback(chip::EndpointId endpoint, chip::ClusterId clusterId, uint8_t commandId,
-                                                      EmberAfStatus status, uint8_t clientServerMask, uint16_t manufacturerCode);
+void emberAfClusterDefaultResponseWithMfgCodeCallback(chip::EndpointId endpoint, chip::ClusterId clusterId,
+                                                      chip::CommandId commandId, EmberAfStatus status, uint8_t clientServerMask,
+                                                      uint16_t manufacturerCode);
 
 // Calls the message sent callback for a specific cluster, and wraps emberAfClusterMessageSentWithMfgCodeCallback
-void emberAfClusterMessageSentCallback(EmberOutgoingMessageType type, uint16_t indexOrDestination, EmberApsFrame * apsFrame,
-                                       uint16_t msgLen, uint8_t * message, EmberStatus status);
+void emberAfClusterMessageSentCallback(const chip::MessageSendDestination & destination, EmberApsFrame * apsFrame, uint16_t msgLen,
+                                       uint8_t * message, EmberStatus status);
 
 // Calls the message sent callback for a specific cluster.
-void emberAfClusterMessageSentWithMfgCodeCallback(EmberOutgoingMessageType type, uint64_t indexOrDestination,
-                                                  EmberApsFrame * apsFrame, uint16_t msgLen, uint8_t * message, EmberStatus status,
+void emberAfClusterMessageSentWithMfgCodeCallback(const chip::MessageSendDestination & destination, EmberApsFrame * apsFrame,
+                                                  uint16_t msgLen, uint8_t * message, EmberStatus status,
                                                   uint16_t manufacturerCode);
 
 // Used to retrieve a manufacturer code from an attribute metadata
@@ -220,3 +250,7 @@ uint8_t emberAfGetClusterCountForEndpoint(chip::EndpointId endpoint);
 EmberAfCluster * emberAfGetClusterByIndex(chip::EndpointId endpoint, uint8_t clusterIndex);
 
 uint16_t emberAfGetDeviceIdForEndpoint(chip::EndpointId endpoint);
+EmberAfStatus emberAfSetDynamicEndpoint(uint16_t index, chip::EndpointId id, EmberAfEndpointType * ep, uint16_t deviceId,
+                                        uint8_t deviceVersion);
+chip::EndpointId emberAfClearDynamicEndpoint(uint16_t index);
+uint16_t emberAfGetDynamicIndexFromEndpoint(chip::EndpointId id);

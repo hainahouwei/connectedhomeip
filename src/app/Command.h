@@ -24,6 +24,11 @@
 
 #pragma once
 
+#include <app/CommandPathParams.h>
+#include <app/InteractionModelDelegate.h>
+#include <app/MessageDef/CommandDataElement.h>
+#include <app/MessageDef/CommandList.h>
+#include <app/MessageDef/InvokeCommand.h>
 #include <core/CHIPCore.h>
 #include <messaging/ExchangeContext.h>
 #include <messaging/ExchangeMgr.h>
@@ -35,10 +40,6 @@
 #include <support/logging/CHIPLogging.h>
 #include <system/SystemPacketBuffer.h>
 #include <system/TLVPacketBufferBackingStore.h>
-
-#include <app/MessageDef/CommandDataElement.h>
-#include <app/MessageDef/CommandList.h>
-#include <app/MessageDef/InvokeCommand.h>
 
 namespace chip {
 namespace app {
@@ -54,35 +55,10 @@ public:
 
     enum class CommandState
     {
-        Uninitialized = 0, //< The invoke command message has not been initialized
-        Initialized,       //< The invoke command message has been initialized and is ready
-        AddCommand,        //< The invoke command message has added Command
-        Sending,           //< The invoke command message  has sent out the invoke command
-    };
-
-    enum class CommandPathFlags : uint8_t
-    {
-        kEndpointIdValid = 0x01, /**< Set when the EndpointId field is valid */
-        kGroupIdValid    = 0x02, /**< Set when the GroupId field is valid */
-    };
-
-    /**
-     * Encapsulates arguments to be passed into SendCommand().
-     *
-     */
-    struct CommandParams
-    {
-        CommandParams(chip::EndpointId endpointId, chip::GroupId groupId, chip::ClusterId clusterId, chip::CommandId commandId,
-                      const BitFlags<CommandPathFlags> & flags) :
-            EndpointId(endpointId),
-            GroupId(groupId), ClusterId(clusterId), CommandId(commandId), Flags(flags)
-        {}
-
-        chip::EndpointId EndpointId;
-        chip::GroupId GroupId;
-        chip::ClusterId ClusterId;
-        chip::CommandId CommandId;
-        BitFlags<CommandPathFlags> Flags;
+        Uninitialized = 0, ///< The invoke command message has not been initialized
+        Initialized,       ///< The invoke command message has been initialized and is ready
+        AddCommand,        ///< The invoke command message has added Command
+        Sending,           ///< The invoke command message has sent out the invoke command
     };
 
     /**
@@ -92,18 +68,18 @@ public:
      *  instance.
      *
      *  @param[in]    apExchangeMgr    A pointer to the ExchangeManager object.
+     *  @param[in]    apDelegate       InteractionModelDelegate set by application.
      *
      *  @retval #CHIP_ERROR_INCORRECT_STATE If the state is not equal to
      *          CommandState::NotInitialized.
      *  @retval #CHIP_NO_ERROR On success.
      *
      */
-    CHIP_ERROR Init(Messaging::ExchangeManager * apExchangeMgr);
+    CHIP_ERROR Init(Messaging::ExchangeManager * apExchangeMgr, InteractionModelDelegate * apDelegate);
 
     /**
-     *  Shutdown the CommandSender. This terminates this instance
+     *  Shutdown the Command. This terminates this instance
      *  of the object and releases all held resources.
-     *
      */
     void Shutdown();
 
@@ -113,14 +89,17 @@ public:
      * @return CHIP_ERROR
      *
      */
-    CHIP_ERROR FinalizeCommandsMessage();
+    CHIP_ERROR FinalizeCommandsMessage(System::PacketBufferHandle & commandPacket);
 
-    chip::TLV::TLVWriter & CreateCommandDataElementTLVWriter();
-    CHIP_ERROR AddCommand(chip::EndpointId aEndpintId, chip::GroupId aGroupId, chip::ClusterId aClusterId,
-                          chip::CommandId aCommandId, BitFlags<CommandPathFlags> Flags);
-    CHIP_ERROR AddCommand(CommandParams & aCommandParams);
-    CHIP_ERROR AddStatusCode(const uint16_t aGeneralCode, Protocols::Id aProtocolId, const uint16_t aProtocolCode,
-                             const chip::ClusterId aClusterId);
+    CHIP_ERROR PrepareCommand(const CommandPathParams & aCommandPathParams, bool aIsStatus = false);
+    TLV::TLVWriter * GetCommandDataElementTLVWriter();
+    CHIP_ERROR FinishCommand(bool aIsStatus = false);
+    virtual CHIP_ERROR AddStatusCode(const CommandPathParams & aCommandPathParams,
+                                     const Protocols::SecureChannel::GeneralStatusCode aGeneralCode,
+                                     const Protocols::Id aProtocolId, const Protocols::InteractionModel::ProtocolCode aProtocolCode)
+    {
+        return CHIP_ERROR_NOT_IMPLEMENTED;
+    };
 
     /**
      * Gets the inner exchange context object, without ownership.
@@ -129,34 +108,40 @@ public:
      *         exchange context has been assigned or the context
      *         has been released.
      */
-    const Messaging::ExchangeContext * GetExchangeContext() const { return mpExchangeCtx; }
+    Messaging::ExchangeContext * GetExchangeContext() const { return mpExchangeCtx; }
 
     CHIP_ERROR Reset();
 
     virtual ~Command() = default;
 
-    bool IsFree() const { return (nullptr == mpExchangeCtx); };
+    bool IsFree() const { return mState == CommandState::Uninitialized; };
     virtual CHIP_ERROR ProcessCommandDataElement(CommandDataElement::Parser & aCommandElement) = 0;
 
 protected:
-    CHIP_ERROR ClearExistingExchangeContext();
+    CHIP_ERROR AbortExistingExchangeContext();
     void MoveToState(const CommandState aTargetState);
     CHIP_ERROR ProcessCommandMessage(System::PacketBufferHandle && payload, CommandRoleId aCommandRoleId);
+    CHIP_ERROR ConstructCommandPath(const CommandPathParams & aCommandPathParams, CommandDataElement::Builder aCommandDataElement);
     void ClearState();
     const char * GetStateStr() const;
 
+    /**
+     * Internal shutdown method that we use when we know what's going on with
+     * our exchange and don't need to manually close it.
+     */
+    void ShutdownInternal();
+
+    InvokeCommand::Builder mInvokeCommandBuilder;
     Messaging::ExchangeManager * mpExchangeMgr = nullptr;
     Messaging::ExchangeContext * mpExchangeCtx = nullptr;
-    chip::System::PacketBufferHandle mCommandMessageBuf;
+    InteractionModelDelegate * mpDelegate      = nullptr;
+    uint8_t mCommandIndex                      = 0;
+    CommandState mState                        = CommandState::Uninitialized;
 
 private:
-    chip::System::PacketBufferHandle mpBufHandle;
-    InvokeCommand::Builder mInvokeCommandBuilder;
-    CommandState mState;
-
-    chip::System::PacketBufferHandle mCommandDataBuf;
+    friend class TestCommandInteraction;
+    TLV::TLVType mDataElementContainerType = TLV::kTLVType_NotSpecified;
     chip::System::PacketBufferTLVWriter mCommandMessageWriter;
-    chip::System::PacketBufferTLVWriter mCommandDataWriter;
 };
 } // namespace app
 } // namespace chip

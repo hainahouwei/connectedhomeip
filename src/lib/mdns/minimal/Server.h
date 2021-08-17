@@ -95,7 +95,7 @@ public:
         BroadcastIpAddresses::GetIpv4Into(mIpv4BroadcastAddress);
 #endif
     }
-    ~ServerBase();
+    virtual ~ServerBase();
 
     /// Closes all currently open endpoints
     void Shutdown();
@@ -107,14 +107,14 @@ public:
     CHIP_ERROR Listen(chip::Inet::InetLayer * inetLayer, ListenIterator * it, uint16_t port);
 
     /// Send the specified packet to a destination IP address over the specified address
-    CHIP_ERROR DirectSend(chip::System::PacketBufferHandle && data, const chip::Inet::IPAddress & addr, uint16_t port,
-                          chip::Inet::InterfaceId interface);
+    virtual CHIP_ERROR DirectSend(chip::System::PacketBufferHandle && data, const chip::Inet::IPAddress & addr, uint16_t port,
+                                  chip::Inet::InterfaceId interface);
 
     /// Send a specific packet broadcast to all interfaces
-    CHIP_ERROR BroadcastSend(chip::System::PacketBufferHandle data, uint16_t port);
+    virtual CHIP_ERROR BroadcastSend(chip::System::PacketBufferHandle && data, uint16_t port);
 
     /// Send a specific packet broadcast to a specific interface
-    CHIP_ERROR BroadcastSend(chip::System::PacketBufferHandle data, uint16_t port, chip::Inet::InterfaceId interface);
+    virtual CHIP_ERROR BroadcastSend(chip::System::PacketBufferHandle && data, uint16_t port, chip::Inet::InterfaceId interface);
 
     ServerBase & SetDelegate(ServerDelegate * d)
     {
@@ -130,8 +130,15 @@ public:
     /// Entries with non-null UDP are considered usable.
     const EndpointInfo * GetEndpoints() const { return mEndpoints; }
 
+    /// A server is considered listening if any UDP endpoint is active.
+    ///
+    /// This is expected to return false after any Shutdown() and will
+    /// return true IFF lListen was called and the listen iterator successfully
+    /// found a valid listening interface.
+    bool IsListening() const;
+
 private:
-    static void OnUdpPacketReceived(chip::Inet::IPEndPointBasis * endPoint, chip::System::PacketBufferHandle buffer,
+    static void OnUdpPacketReceived(chip::Inet::IPEndPointBasis * endPoint, chip::System::PacketBufferHandle && buffer,
                                     const chip::Inet::IPPacketInfo * info);
 
     EndpointInfo * mEndpoints;   // possible endpoints, to listen on multiple interfaces

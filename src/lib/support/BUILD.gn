@@ -57,6 +57,8 @@ static_library("support") {
     "BufferReader.h",
     "BufferWriter.cpp",
     "BufferWriter.h",
+    "BytesCircularBuffer.cpp",
+    "BytesCircularBuffer.h",
     "BytesToHex.cpp",
     "BytesToHex.h",
     "CHIPArgParser.cpp",
@@ -69,27 +71,37 @@ static_library("support") {
     "CHIPPlatformMemory.h",
     "CodeUtils.h",
     "DLLUtil.h",
+    "Defer.h",
     "ErrorStr.cpp",
     "ErrorStr.h",
     "FibonacciUtils.cpp",
     "FibonacciUtils.h",
+    "FixedBufferAllocator.cpp",
+    "FixedBufferAllocator.h",
     "LifetimePersistedCounter.cpp",
     "LifetimePersistedCounter.h",
     "PersistedCounter.cpp",
     "PersistedCounter.h",
+    "PersistentStorageMacros.h",
     "Pool.cpp",
     "Pool.h",
     "PrivateHeap.cpp",
     "PrivateHeap.h",
     "RandUtils.cpp",
     "RandUtils.h",
+    "ReferenceCountedHandle.h",
     "SafeInt.h",
     "SerializableIntegerSet.cpp",
     "SerializableIntegerSet.h",
+    "ThreadOperationalDataset.cpp",
+    "ThreadOperationalDataset.h",
     "TimeUtils.cpp",
     "TimeUtils.h",
     "UnitTestRegistration.cpp",
     "UnitTestRegistration.h",
+    "UnitTestUtils.cpp",
+    "UnitTestUtils.h",
+    "Variant.h",
     "logging/CHIPLogging.cpp",
     "logging/CHIPLogging.h",
     "verhoeff/Verhoeff.cpp",
@@ -108,6 +120,7 @@ static_library("support") {
     ":chip_version_header",
     ":logging_constants",
     "${chip_root}/src/lib/core:chip_config_header",
+    "${chip_root}/src/platform:platform_buildconfig",
     "${chip_root}/src/platform/logging:headers",
     "${nlassert_root}:nlassert",
     "${nlio_root}:nlio",
@@ -133,7 +146,7 @@ static_library("support") {
   ]
 
   if (chip_config_memory_management == "simple") {
-    sources += [ "CHIPMem-SimpleAlloc.cpp" ]
+    sources += [ "CHIPMem-Simple.cpp" ]
   }
   if (chip_config_memory_management == "malloc") {
     sources += [ "CHIPMem-Malloc.cpp" ]

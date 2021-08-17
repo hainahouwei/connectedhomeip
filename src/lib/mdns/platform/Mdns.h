@@ -25,20 +25,27 @@
 
 #pragma once
 
+#include <algorithm>
 #include <stdint.h>
 
 #include "core/CHIPError.h"
 #include "inet/IPAddress.h"
 #include "inet/InetInterface.h"
 #include "lib/core/Optional.h"
+#include "lib/mdns/ServiceNaming.h"
 
 namespace chip {
 namespace Mdns {
 
-static constexpr uint8_t kMdnsNameMaxSize         = 33;
-static constexpr uint8_t kMdnsProtocolTextMaxSize = 8;
-static constexpr uint8_t kMdnsTypeMaxSize         = 32;
-static constexpr uint16_t kMdnsTextMaxSize        = 64;
+// None of these sizes include an null character at the end.
+static constexpr uint8_t kMdnsInstanceNameMaxSize = 33; // [Node]-[Fabric] ID in hex - 16+1+16
+static constexpr uint8_t kMdnsHostNameMaxSize     = 16; // 64-bits in hex.
+static constexpr size_t kMdnsProtocolTextMaxSize  = std::max(sizeof(kOperationalProtocol), sizeof(kCommissionProtocol)) - 1;
+static constexpr size_t kMdnsTypeMaxSize =
+    std::max({ sizeof(kCommissionableServiceName), sizeof(kOperationalServiceName), sizeof(kCommissionerServiceName) }) - 1;
+static constexpr uint8_t kMdnsTypeAndProtocolMaxSize     = kMdnsTypeMaxSize + kMdnsProtocolTextMaxSize + 1; // <type>.<protocol>
+static constexpr uint16_t kMdnsTextMaxSize               = 64;
+static constexpr uint8_t kMdnsFullTypeAndProtocolMaxSize = kMaxSubtypeDescSize + /* '.' */ 1 + kMdnsTypeAndProtocolMaxSize;
 
 enum class MdnsServiceProtocol : uint8_t
 {
@@ -56,7 +63,8 @@ struct TextEntry
 
 struct MdnsService
 {
-    char mName[kMdnsNameMaxSize + 1];
+    char mName[kMdnsInstanceNameMaxSize + 1];
+    char mHostName[kMdnsHostNameMaxSize + 1] = "";
     char mType[kMdnsTypeMaxSize + 1];
     MdnsServiceProtocol mProtocol;
     Inet::IPAddressType mAddressType;
@@ -112,14 +120,6 @@ using MdnsAsyncReturnCallback = void (*)(void * context, CHIP_ERROR error);
 CHIP_ERROR ChipMdnsInit(MdnsAsyncReturnCallback initCallback, MdnsAsyncReturnCallback errorCallback, void * context);
 
 /**
- * This function sets the host name for services.
- *
- * @param[in] hostname   The hostname.
- *
- */
-CHIP_ERROR ChipMdnsSetHostname(const char * hostname);
-
-/**
  * This function publishes an service via mDNS.
  *
  * Calling the function again with the same service name, type, protocol,
@@ -136,13 +136,25 @@ CHIP_ERROR ChipMdnsSetHostname(const char * hostname);
 CHIP_ERROR ChipMdnsPublishService(const MdnsService * service);
 
 /**
- * This function stops publishing service via mDNS.
+ * This function stops publishing all services via mDNS.
  *
  * @retval CHIP_NO_ERROR                The publish stops successfully.
  * @retval Error code                   Stopping the publish fails.
  *
  */
 CHIP_ERROR ChipMdnsStopPublish();
+
+/**
+ * This function stops publishing a specific service via mDNS.
+ *
+ * @param[in] service   The service entry.
+ *
+ * @retval CHIP_NO_ERROR                The service stop succeeds.
+ * @retval CHIP_ERROR_INVALID_ARGUMENT  The service is nullptr.
+ * @retval Error code                   The service stop fails.
+ *
+ */
+CHIP_ERROR ChipMdnsStopPublishService(const MdnsService * service);
 
 /**
  * This function browses the services published by mdns

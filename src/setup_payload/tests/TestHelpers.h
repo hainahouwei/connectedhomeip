@@ -17,10 +17,11 @@
 
 #include <bitset>
 
-#include "Base41.cpp"
-#include "QRCodeSetupPayloadGenerator.cpp"
-#include "QRCodeSetupPayloadParser.cpp"
-#include "SetupPayload.cpp"
+#include <setup_payload/Base38Decode.cpp>
+#include <setup_payload/Base38Encode.cpp>
+#include <setup_payload/QRCodeSetupPayloadGenerator.cpp>
+#include <setup_payload/QRCodeSetupPayloadParser.cpp>
+#include <setup_payload/SetupPayload.cpp>
 
 namespace chip {
 
@@ -36,6 +37,8 @@ const uint32_t kOptionalDefaultIntValue = 12;
 const char * kSerialNumberDefaultStringValue   = "123456789";
 const uint32_t kSerialNumberDefaultUInt32Value = 123456789;
 
+constexpr const char * kDefaultPayloadQRCode = "MT:R5L90MP500K64J00000";
+
 inline SetupPayload GetDefaultPayload()
 {
     SetupPayload payload;
@@ -43,8 +46,8 @@ inline SetupPayload GetDefaultPayload()
     payload.version               = 5;
     payload.vendorID              = 12;
     payload.productID             = 1;
-    payload.requiresCustomFlow    = 0;
-    payload.rendezvousInformation = RendezvousInformationFlags::kWiFi;
+    payload.commissioningFlow     = CommissioningFlow::kStandard;
+    payload.rendezvousInformation = RendezvousInformationFlags(RendezvousInformationFlag::kSoftAP);
     payload.discriminator         = 128;
     payload.setUpPINCode          = 2048;
 
@@ -69,14 +72,14 @@ inline SetupPayload GetDefaultPayloadWithOptionalDefaults()
     return payload;
 }
 
-inline std::string toBinaryRepresentation(std::string base41Result)
+inline std::string toBinaryRepresentation(std::string base38Result)
 {
     // Remove the kQRCodePrefix
-    base41Result.erase(0, strlen(kQRCodePrefix));
+    base38Result.erase(0, strlen(kQRCodePrefix));
 
-    // Decode the base41 encoded string
+    // Decode the base38 encoded string
     std::vector<uint8_t> buffer;
-    base41Decode(base41Result, buffer);
+    base38Decode(base38Result, buffer);
 
     // Convert it to binary
     std::string binaryResult;
@@ -97,7 +100,7 @@ inline std::string toBinaryRepresentation(std::string base41Result)
     pos -= kProductIDFieldLengthInBits;
     binaryResult.insert(pos, " ");
 
-    pos -= kCustomFlowRequiredFieldLengthInBits;
+    pos -= kCommissioningFlowFieldLengthInBits;
     binaryResult.insert(pos, " ");
 
     pos -= kRendezvousInfoFieldLengthInBits;
@@ -120,8 +123,8 @@ inline bool CompareBinary(SetupPayload & payload, std::string & expectedBinary)
     QRCodeSetupPayloadGenerator generator(payload);
 
     std::string result;
-    uint8_t optionalInfo[kDefaultBufferSizeInBytes];
-    generator.payloadBase41Representation(result, optionalInfo, sizeof(optionalInfo));
+    uint8_t optionalInfo[kDefaultBufferSizeInBytes] = {};
+    generator.payloadBase38Representation(result, optionalInfo, sizeof(optionalInfo));
 
     std::string resultBinary = toBinaryRepresentation(result);
     return (expectedBinary == resultBinary);
@@ -132,12 +135,12 @@ inline bool CheckWriteRead(SetupPayload & inPayload)
     SetupPayload outPayload;
     std::string result;
 
-    QRCodeSetupPayloadGenerator generator(inPayload);
     uint8_t optionalInfo[kDefaultBufferSizeInBytes];
-    generator.payloadBase41Representation(result, optionalInfo, sizeof(optionalInfo));
+    memset(optionalInfo, 0xFF, sizeof(optionalInfo));
+    QRCodeSetupPayloadGenerator(inPayload).payloadBase38Representation(result, optionalInfo, sizeof(optionalInfo));
 
-    QRCodeSetupPayloadParser parser = QRCodeSetupPayloadParser(result);
-    parser.populatePayload(outPayload);
+    outPayload = {};
+    QRCodeSetupPayloadParser(result).populatePayload(outPayload);
 
     return inPayload == outPayload;
 }

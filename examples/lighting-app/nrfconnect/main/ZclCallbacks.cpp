@@ -18,55 +18,31 @@
 
 #include <support/logging/CHIPLogging.h>
 
-#include "af.h"
-#include "gen/attribute-id.h"
-#include "gen/cluster-id.h"
-#include "gen/command-id.h"
+#include <app/common/gen/ids/Attributes.h>
+#include <app/common/gen/ids/Clusters.h>
+#include <app/common/gen/ids/Commands.h>
 #include <app/util/af-types.h>
+#include <app/util/af.h>
 
 #include "AppTask.h"
 #include "LightingManager.h"
 
 using namespace chip;
+using namespace chip::app::Clusters;
 
 void emberAfPostAttributeChangeCallback(EndpointId endpoint, ClusterId clusterId, AttributeId attributeId, uint8_t mask,
-                                        uint16_t manufacturerCode, uint8_t type, uint8_t size, uint8_t * value)
+                                        uint16_t manufacturerCode, uint8_t type, uint16_t size, uint8_t * value)
 {
-    ChipLogProgress(Zcl, "Cluster callback: %d", clusterId);
-
-    if (clusterId == ZCL_ON_OFF_CLUSTER_ID)
+    if (clusterId == OnOff::Id && attributeId == OnOff::Attributes::Ids::OnOff)
     {
-        if (attributeId != ZCL_ON_OFF_ATTRIBUTE_ID)
-        {
-            ChipLogProgress(Zcl, "Unknown attribute ID: %d", attributeId);
-            return;
-        }
-
+        ChipLogProgress(Zcl, "Cluster OnOff: attribute OnOff set to %" PRIu8, *value);
         LightingMgr().InitiateAction(*value ? LightingManager::ON_ACTION : LightingManager::OFF_ACTION,
                                      AppEvent::kEventType_Lighting, size, value);
     }
-    else if (clusterId == ZCL_LEVEL_CONTROL_CLUSTER_ID)
+    else if (clusterId == LevelControl::Id && attributeId == LevelControl::Attributes::Ids::CurrentLevel)
     {
-        if (attributeId != ZCL_MOVE_TO_LEVEL_COMMAND_ID)
-        {
-            ChipLogProgress(Zcl, "Unknown attribute ID: %d", attributeId);
-            return;
-        }
-
-        ChipLogProgress(Zcl, "Value: %u, length %u", *value, size);
-        if (size == 1)
-        {
-            LightingMgr().InitiateAction(LightingManager::LEVEL_ACTION, AppEvent::kEventType_Lighting, size, value);
-        }
-        else
-        {
-            ChipLogError(Zcl, "wrong length for level: %d", size);
-        }
-    }
-    else
-    {
-        ChipLogProgress(Zcl, "Unknown cluster ID: %d", clusterId);
-        return;
+        ChipLogProgress(Zcl, "Cluster LevelControl: attribute CurrentLevel set to %" PRIu8, *value);
+        LightingMgr().InitiateAction(LightingManager::LEVEL_ACTION, AppEvent::kEventType_Lighting, size, value);
     }
 }
 

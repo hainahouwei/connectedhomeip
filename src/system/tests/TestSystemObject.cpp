@@ -32,7 +32,8 @@
 // collisions between the threads that call it.
 
 // clang-format off
-#define SYSTEM_OBJECT_HWM_TEST_HOOK() do { usleep(1000); } while(0)
+#include <support/UnitTestUtils.h>
+#define SYSTEM_OBJECT_HWM_TEST_HOOK() do { chip::test_utils::SleepMillis(1); } while(0)
 // clang-format on
 
 #include <system/SystemLayer.h>
@@ -57,6 +58,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <type_traits>
 
 // Test context
 using namespace chip::System;
@@ -70,7 +72,7 @@ static int Finalize(void * aContext);
 class TestObject : public Object
 {
 public:
-    Error Init();
+    CHIP_ERROR Init();
 
     static void CheckRetention(nlTestSuite * inSuite, void * aContext);
     static void CheckConcurrency(nlTestSuite * inSuite, void * aContext);
@@ -80,16 +82,18 @@ public:
 private:
     enum
     {
-        kPoolSize = 122 // a multiple of kNumThreads, less than CHIP_SYS_STATS_COUNT_MAX
+        kPoolSize = 112 // a multiple of kNumThreads, less than CHIP_SYS_STATS_COUNT_MAX
     };
     static ObjectPool<TestObject, kPoolSize> sPool;
+    static_assert(kPoolSize < CHIP_SYS_STATS_COUNT_MAX, "kPoolSize is not less than CHIP_SYS_STATS_COUNT_MAX");
 
 #if CHIP_SYSTEM_CONFIG_POSIX_LOCKING
     unsigned int mDelay;
 
     static constexpr int kNumThreads         = 16;
-    static constexpr int kLoopIterations     = 100000;
+    static constexpr int kLoopIterations     = 1000;
     static constexpr int kMaxDelayIterations = 3;
+    static_assert(kPoolSize % kNumThreads == 0, "kPoolSize is not a multiple of kNumThreads");
 
     void Delay(volatile unsigned int & aAccumulator);
     static void * CheckConcurrencyThread(void * aContext);
@@ -104,7 +108,7 @@ private:
 
 ObjectPool<TestObject, TestObject::kPoolSize> TestObject::sPool;
 
-Error TestObject::Init()
+CHIP_ERROR TestObject::Init()
 {
 #if CHIP_SYSTEM_CONFIG_POSIX_LOCKING
     this->mDelay = kMaxDelayIterations > 0 ? 1 : 0;
@@ -114,14 +118,13 @@ Error TestObject::Init()
     }
 #endif // CHIP_SYSTEM_CONFIG_POSIX_LOCKING
 
-    return CHIP_SYSTEM_NO_ERROR;
+    return CHIP_NO_ERROR;
 }
 
 namespace {
 struct TestContext
 {
     nlTestSuite * mTestSuite;
-    void * mLayerContext;
     volatile unsigned int mAccumulator;
 };
 
@@ -136,7 +139,7 @@ void TestObject::CheckRetention(nlTestSuite * inSuite, void * aContext)
     Layer lLayer;
     unsigned int i, j;
 
-    lLayer.Init(lContext.mLayerContext);
+    lLayer.Init();
     memset(&sPool, 0, sizeof(sPool));
 
     for (i = 0; i < kPoolSize; ++i)
@@ -144,8 +147,6 @@ void TestObject::CheckRetention(nlTestSuite * inSuite, void * aContext)
         TestObject * lCreated = sPool.TryCreate(lLayer);
 
         NL_TEST_ASSERT(lContext.mTestSuite, lCreated != nullptr);
-        if (lCreated == nullptr)
-            continue;
         NL_TEST_ASSERT(lContext.mTestSuite, lCreated->IsRetained(lLayer));
         NL_TEST_ASSERT(lContext.mTestSuite, &(lCreated->SystemLayer()) == &lLayer);
 
@@ -222,7 +223,7 @@ void * TestObject::CheckConcurrencyThread(void * aContext)
     Layer lLayer;
     unsigned int i;
 
-    lLayer.Init(lContext.mLayerContext);
+    lLayer.Init();
 
     // Take this thread's share of objects
 
@@ -360,7 +361,7 @@ void TestObject::CheckConcurrency(nlTestSuite * inSuite, void * aContext)
 void TestObject::CheckHighWatermarkConcurrency(nlTestSuite * inSuite, void * aContext)
 {
 #if CHIP_SYSTEM_CONFIG_POSIX_LOCKING
-    for (unsigned int i = 0; i < 1000; i++)
+    for (unsigned int i = 0; i < 100; i++)
     {
         MultithreadedTest(inSuite, aContext, CheckHighWatermarkThread);
     }
@@ -378,7 +379,7 @@ void TestObject::CheckHighWatermark(nlTestSuite * inSuite, void * aContext)
     chip::System::Stats::count_t lNumInUse;
     chip::System::Stats::count_t lHighWatermark;
 
-    lLayer.Init(lContext.mLayerContext);
+    lLayer.Init();
 
     // Take all objects one at a time and check the watermark
     // increases monotonically
@@ -486,7 +487,6 @@ static nlTestSuite sTestSuite =
 static int Initialize(void * aContext)
 {
     TestContext & lContext = *reinterpret_cast<TestContext *>(aContext);
-    void * lLayerContext   = nullptr;
 
 #if CHIP_SYSTEM_CONFIG_USE_LWIP && LWIP_VERSION_MAJOR <= 2 && LWIP_VERSION_MINOR < 1
     static sys_mbox_t * sLwIPEventQueue = NULL;
@@ -495,13 +495,10 @@ static int Initialize(void * aContext)
     {
         sys_mbox_new(sLwIPEventQueue, 100);
     }
-
-    lLayerContext = &sLwIPEventQueue;
 #endif // CHIP_SYSTEM_CONFIG_USE_LWIP
 
-    lContext.mTestSuite    = &sTestSuite;
-    lContext.mLayerContext = lLayerContext;
-    lContext.mAccumulator  = 0;
+    lContext.mTestSuite   = &sTestSuite;
+    lContext.mAccumulator = 0;
 
     return SUCCESS;
 }

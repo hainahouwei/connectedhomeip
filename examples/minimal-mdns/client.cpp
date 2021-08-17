@@ -17,6 +17,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <inet/InetInterface.h>
@@ -151,7 +152,7 @@ OptionDef cmdLineOptionsDef[] = {
     { "query-port", kArgumentRequired, kOptionQueryPort },
     { "timeout-ms", kArgumentRequired, kOptionRuntimeMs },
     { "multicast-reply", kNoArgument, kOptionMulticastReplies },
-    nullptr,
+    {},
 };
 
 OptionSet cmdLineOptions = { HandleOptions, cmdLineOptionsDef, "PROGRAM OPTIONS",
@@ -307,34 +308,35 @@ int main(int argc, char ** args)
 
     printf("Running...\n");
 
-    mdns::Minimal::Server<10> mdnsServer;
+    mdns::Minimal::Server<20> mdnsServer;
     ReportDelegate reporter;
 
     mdnsServer.SetDelegate(&reporter);
 
     {
+
         MdnsExample::AllInterfaces allInterfaces(gOptions.enableIpV4);
 
-        if (mdnsServer.Listen(&chip::DeviceLayer::InetLayer, &allInterfaces, gOptions.listenPort) != CHIP_NO_ERROR)
+        CHIP_ERROR err = mdnsServer.Listen(&chip::DeviceLayer::InetLayer, &allInterfaces, gOptions.listenPort);
+        if (err != CHIP_NO_ERROR)
         {
-            printf("Server failed to listen on all interfaces\n");
+            printf("Server failed to listen on all interfaces: %s\n", chip::ErrorStr(err));
             return 1;
         }
     }
 
     BroadcastPacket(&mdnsServer);
 
-    System::Timer * timer = nullptr;
-
-    if (DeviceLayer::SystemLayer.NewTimer(timer) == CHIP_NO_ERROR)
+    CHIP_ERROR err = DeviceLayer::SystemLayer.StartTimer(
+        gOptions.runtimeMs,
+        [](System::Layer *, void *, CHIP_ERROR err) {
+            DeviceLayer::PlatformMgr().StopEventLoopTask();
+            DeviceLayer::PlatformMgr().Shutdown();
+        },
+        nullptr);
+    if (err != CHIP_NO_ERROR)
     {
-        timer->Start(
-            gOptions.runtimeMs, [](System::Layer *, void *, System::Error err) { DeviceLayer::PlatformMgr().Shutdown(); }, nullptr);
-    }
-    else
-    {
-
-        printf("Failed to create the shutdown timer. Kill with ^C.\n");
+        printf("Failed to create the shutdown timer. Kill with ^C. %" CHIP_ERROR_FORMAT "\n", err.Format());
     }
 
     DeviceLayer::PlatformMgr().RunEventLoop();

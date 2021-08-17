@@ -43,6 +43,19 @@ public:
         ChipLogError(Discovery, "mDNS advertising not available. Commisioning Advertisement failed.");
         return CHIP_ERROR_NOT_IMPLEMENTED;
     }
+
+    /// Stops the advertiser.
+    CHIP_ERROR StopPublishDevice() override
+    {
+        ChipLogError(Discovery, "mDNS advertising not available. mDNS stop not available.");
+        return CHIP_ERROR_NOT_IMPLEMENTED;
+    }
+
+    CHIP_ERROR GetCommissionableInstanceName(char * instanceName, size_t maxLength) override
+    {
+        ChipLogError(Discovery, "mDNS advertising not available. mDNS GetCommissionableInstanceName not available.");
+        return CHIP_ERROR_NOT_IMPLEMENTED;
+    }
 };
 
 NoneAdvertiser gAdvertiser;

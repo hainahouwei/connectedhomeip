@@ -21,30 +21,34 @@
 #include "../../config/PersistentStorage.h"
 #include "../common/Command.h"
 
+#include <controller/ExampleOperationalCredentialsIssuer.h>
+
 // Limits on endpoint values.
 #define CHIP_ZCL_ENDPOINT_MIN 0x00
 #define CHIP_ZCL_ENDPOINT_MAX 0xF0
 
-class ReportingCommand : public Command, public chip::Controller::DeviceStatusDelegate
+class ReportingCommand : public Command
 {
 public:
-    ReportingCommand(const char * commandName) : Command(commandName)
+    ReportingCommand(const char * commandName) :
+        Command(commandName), mOnDeviceConnectedCallback(OnDeviceConnectedFn, this),
+        mOnDeviceConnectionFailureCallback(OnDeviceConnectionFailureFn, this)
     {
         AddArgument("endpoint-id", CHIP_ZCL_ENDPOINT_MIN, CHIP_ZCL_ENDPOINT_MAX, &mEndPointId);
     }
 
     /////////// Command Interface /////////
-    CHIP_ERROR Run(PersistentStorage & storage, NodeId localId, NodeId remoteId) override;
-
-    /////////// DeviceStatusDelegate Interface /////////
-    void OnMessage(PacketBufferHandle buffer) override;
-    void OnStatusChange(void) override;
+    CHIP_ERROR Run() override;
+    uint16_t GetWaitDurationInSeconds() const override { return UINT16_MAX; }
 
     virtual void AddReportCallbacks(uint8_t endPointId) = 0;
 
 private:
     uint8_t mEndPointId;
 
-    ChipDeviceCommissioner mCommissioner;
-    ChipDevice * mDevice;
+    static void OnDeviceConnectedFn(void * context, chip::Controller::Device * device);
+    static void OnDeviceConnectionFailureFn(void * context, NodeId deviceId, CHIP_ERROR error);
+
+    chip::Callback::Callback<chip::Controller::OnDeviceConnected> mOnDeviceConnectedCallback;
+    chip::Callback::Callback<chip::Controller::OnDeviceConnectionFailure> mOnDeviceConnectionFailureCallback;
 };

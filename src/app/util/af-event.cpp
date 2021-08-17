@@ -37,10 +37,10 @@
  *******************************************************************************
  ******************************************************************************/
 
-#include "af-event.h"
+#include <app/util/af-event.h>
 
-#include "af.h"
-#include "attribute-storage.h"
+#include <app/util/af.h>
+#include <app/util/attribute-storage.h>
 
 #include <platform/CHIPDeviceLayer.h>
 #include <system/SystemTimer.h>
@@ -49,8 +49,9 @@
 #define EMBER_MAX_EVENT_CONTROL_DELAY_QS (EMBER_MAX_EVENT_CONTROL_DELAY_MS >> 8)
 #define EMBER_MAX_EVENT_CONTROL_DELAY_MINUTES (EMBER_MAX_EVENT_CONTROL_DELAY_MS >> 16)
 
+#include <app/common/gen/callback.h>
+
 #include "gen/af-gen-event.h"
-#include "gen/callback.h"
 
 using namespace chip;
 
@@ -96,7 +97,7 @@ EmberEventData emAfEvents[] = {
     { NULL, NULL }
 };
 
-void EventControlHandler(chip::System::Layer * systemLayer, void * appState, chip::System::Error error)
+void EventControlHandler(chip::System::Layer * systemLayer, void * appState)
 {
     EmberEventControl * control = reinterpret_cast<EmberEventControl *>(appState);
     if (control->status != EMBER_EVENT_INACTIVE)
@@ -144,14 +145,12 @@ static EmberAfEventContext * findEventContext(EndpointId endpoint, ClusterId clu
 
 EmberStatus emberEventControlSetDelayMS(EmberEventControl * control, uint32_t delayMs)
 {
-    if (delayMs == 0)
-    {
-        emberEventControlSetActive(control);
-    }
-    else if (delayMs <= EMBER_MAX_EVENT_CONTROL_DELAY_MS)
+    if (delayMs <= EMBER_MAX_EVENT_CONTROL_DELAY_MS)
     {
         control->status = EMBER_EVENT_MS_TIME;
+#if !CHIP_DEVICE_LAYER_NONE
         chip::DeviceLayer::SystemLayer.StartTimer(delayMs, EventControlHandler, control);
+#endif
     }
     else
     {
@@ -165,7 +164,9 @@ void emberEventControlSetInactive(EmberEventControl * control)
     if (control->status != EMBER_EVENT_INACTIVE)
     {
         control->status = EMBER_EVENT_INACTIVE;
+#if !CHIP_DEVICE_LAYER_NONE
         chip::DeviceLayer::SystemLayer.CancelTimer(EventControlHandler, control);
+#endif
     }
 }
 
@@ -177,7 +178,9 @@ bool emberEventControlGetActive(EmberEventControl * control)
 void emberEventControlSetActive(EmberEventControl * control)
 {
     control->status = EMBER_EVENT_ZERO_DELAY;
+#if !CHIP_DEVICE_LAYER_NONE
     chip::DeviceLayer::SystemLayer.ScheduleWork(EventControlHandler, control);
+#endif
 }
 
 EmberStatus emberAfEventControlSetDelayQS(EmberEventControl * control, uint32_t delayQs)

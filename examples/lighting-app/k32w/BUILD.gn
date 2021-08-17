@@ -24,26 +24,24 @@ assert(current_os == "freertos")
 k32w_platform_dir = "${chip_root}/examples/platform/k32w"
 
 k32w_sdk("sdk") {
-  include_dirs = [
-    "main/include",
-    "main",
-    "${k32w_platform_dir}/app/project_include",
-    "${k32w_platform_dir}/app/support",
-    "${chip_root}/examples/lighting-app/lighting-common",
-    "${chip_root}/src/app/util",
-    "${chip_root}/src/app/server",
-    "${k32w_platform_dir}/util/include",
-  ]
-
   sources = [
-    "${k32w_platform_dir}/app/project_include/CHIPProjectConfig.h",
-    "${k32w_platform_dir}/app/project_include/FreeRTOSConfig.h",
     "${k32w_platform_dir}/app/project_include/OpenThreadConfig.h",
+    "include/CHIPProjectConfig.h",
+    "include/FreeRTOSConfig.h",
     "main/include/app_config.h",
   ]
 
   public_deps =
       [ "${chip_root}/third_party/openthread/platforms:libopenthread-platform" ]
+
+  include_dirs = [
+    "main/include",
+    "main",
+    "include",
+    "${k32w_platform_dir}/app/project_include",
+    "${k32w_platform_dir}/app/support",
+    "${k32w_platform_dir}/util/include",
+  ]
 
   defines = []
   if (is_debug) {
@@ -75,15 +73,19 @@ k32w_executable("light_app") {
     "${chip_root}/src/lib",
     "${chip_root}/third_party/mbedtls:mbedtls",
     "${k32w_platform_dir}/app/support:freertos_mbedtls_utils",
-    "${openthread_root}:libopenthread-cli-ftd",
-    "${openthread_root}:libopenthread-ftd",
+    "${openthread_root}:libopenthread-cli-mtd",
+    "${openthread_root}:libopenthread-mtd",
   ]
 
-  output_dir = root_out_dir
+  cflags = [ "-Wconversion" ]
 
   ldscript = "${k32w_platform_dir}/app/ldscripts/chip-k32w061-linker.ld"
 
+  inputs = [ ldscript ]
+
   ldflags = [ "-T" + rebase_path(ldscript, root_build_dir) ]
+
+  output_dir = root_out_dir
 }
 
 group("k32w") {

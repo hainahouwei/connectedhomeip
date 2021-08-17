@@ -39,9 +39,10 @@
  *******************************************************************************
  ******************************************************************************/
 
-#include "af.h"
-#include "config.h"
-#include "util.h"
+#include <app/util/af.h>
+#include <app/util/config.h>
+#include <app/util/util.h>
+#include <lib/support/TypeTraits.h>
 
 using namespace chip;
 
@@ -55,7 +56,7 @@ using namespace chip;
 // receives multiple ZCL messages, the stack will queue these and hand
 // these to the application via emberIncomingMsgHandler one at a time.
 EmberApsFrame emberAfResponseApsFrame;
-NodeId emberAfResponseDestination;
+Messaging::ExchangeContext * emberAfResponseDestination;
 uint8_t appResponseData[EMBER_AF_RESPONSE_BUFFER_LEN];
 uint16_t appResponseLength;
 
@@ -180,6 +181,11 @@ uint8_t * emberAfPutDateInResp(EmberAfDate * value)
 void emberAfPutInt16sInResp(int16_t value)
 {
     emberAfPutInt16uInResp(static_cast<uint16_t>(value));
+}
+
+void emberAfPutStatusInResp(EmberAfStatus value)
+{
+    emberAfPutInt8uInResp(to_underlying(value));
 }
 
 // ------------------------------------

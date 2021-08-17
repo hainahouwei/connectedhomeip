@@ -33,6 +33,7 @@
 #include <support/CodeUtils.h>
 #include <transport/SecureSessionMgr.h>
 #include <transport/TransportMgr.h>
+#include <transport/raw/tests/NetworkTestHelpers.h>
 
 #include <nlbyteorder.h>
 #include <nlunit-test.h>
@@ -49,37 +50,44 @@ using namespace chip::Messaging;
 
 using TestContext = chip::Test::MessagingContext;
 
-TestContext sContext;
-
-class LoopbackTransport : public Transport::Base
+enum : uint8_t
 {
-public:
-    /// Transports are required to have a constructor that takes exactly one argument
-    CHIP_ERROR Init(const char * unused) { return CHIP_NO_ERROR; }
-
-    CHIP_ERROR SendMessage(const PacketHeader & header, const PeerAddress & address, System::PacketBufferHandle msgBuf) override
-    {
-        HandleMessageReceived(header, address, std::move(msgBuf));
-        return CHIP_NO_ERROR;
-    }
-
-    bool CanSendToPeer(const PeerAddress & address) override { return true; }
+    kMsgType_TEST1 = 1,
+    kMsgType_TEST2 = 2,
 };
 
-TransportMgr<LoopbackTransport> gTransportMgr;
+TestContext sContext;
+
+TransportMgr<Test::LoopbackTransport> gTransportMgr;
+Test::IOContext gIOContext;
 
 class MockAppDelegate : public ExchangeDelegate
 {
 public:
-    void OnMessageReceived(ExchangeContext * ec, const PacketHeader & packetHeader, const PayloadHeader & payloadHeader,
-                           System::PacketBufferHandle buffer) override
+    CHIP_ERROR OnMessageReceived(ExchangeContext * ec, const PacketHeader & packetHeader, const PayloadHeader & payloadHeader,
+                                 System::PacketBufferHandle && buffer) override
     {
         IsOnMessageReceivedCalled = true;
+        return CHIP_NO_ERROR;
     }
 
     void OnResponseTimeout(ExchangeContext * ec) override {}
 
     bool IsOnMessageReceivedCalled = false;
+};
+
+class WaitForTimeoutDelegate : public ExchangeDelegate
+{
+public:
+    CHIP_ERROR OnMessageReceived(ExchangeContext * ec, const PacketHeader & packetHeader, const PayloadHeader & payloadHeader,
+                                 System::PacketBufferHandle && buffer) override
+    {
+        return CHIP_NO_ERROR;
+    }
+
+    void OnResponseTimeout(ExchangeContext * ec) override { IsOnResponseTimeoutCalled = true; }
+
+    bool IsOnResponseTimeoutCalled = false;
 };
 
 void CheckNewContextTest(nlTestSuite * inSuite, void * inContext)
@@ -102,6 +110,51 @@ void CheckNewContextTest(nlTestSuite * inSuite, void * inContext)
     auto sessionLocalToPeer = ctx.GetSecureSessionManager().GetPeerConnectionState(ec2->GetSecureSession());
     NL_TEST_ASSERT(inSuite, sessionLocalToPeer->GetPeerNodeId() == ctx.GetDestinationNodeId());
     NL_TEST_ASSERT(inSuite, sessionLocalToPeer->GetPeerKeyID() == ctx.GetPeerKeyId());
+
+    ec1->Close();
+    ec2->Close();
+}
+
+void CheckSessionExpirationBasics(nlTestSuite * inSuite, void * inContext)
+{
+    TestContext & ctx = *reinterpret_cast<TestContext *>(inContext);
+
+    MockAppDelegate sendDelegate;
+    ExchangeContext * ec1 = ctx.NewExchangeToLocal(&sendDelegate);
+
+    // Expire the session this exchange is supposedly on.
+    ctx.GetExchangeManager().OnConnectionExpired(ec1->GetSecureSession());
+
+    MockAppDelegate receiveDelegate;
+    CHIP_ERROR err =
+        ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForType(Protocols::BDX::Id, kMsgType_TEST1, &receiveDelegate);
+    NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
+
+    err = ec1->SendMessage(Protocols::BDX::Id, kMsgType_TEST1, System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
+                           SendFlags(Messaging::SendMessageFlags::kNoAutoRequestAck));
+    NL_TEST_ASSERT(inSuite, err != CHIP_NO_ERROR);
+    NL_TEST_ASSERT(inSuite, !receiveDelegate.IsOnMessageReceivedCalled);
+    ec1->Close();
+
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::BDX::Id, kMsgType_TEST1);
+    NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
+}
+
+void CheckSessionExpirationTimeout(nlTestSuite * inSuite, void * inContext)
+{
+    TestContext & ctx = *reinterpret_cast<TestContext *>(inContext);
+
+    WaitForTimeoutDelegate sendDelegate;
+    ExchangeContext * ec1 = ctx.NewExchangeToLocal(&sendDelegate);
+
+    ec1->SendMessage(Protocols::BDX::Id, kMsgType_TEST1, System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
+                     SendFlags(Messaging::SendMessageFlags::kExpectResponse).Set(Messaging::SendMessageFlags::kNoAutoRequestAck));
+    NL_TEST_ASSERT(inSuite, !sendDelegate.IsOnResponseTimeoutCalled);
+
+    // Expire the session this exchange is supposedly on.  This should close the
+    // exchange.
+    ctx.GetExchangeManager().OnConnectionExpired(ec1->GetSecureSession());
+    NL_TEST_ASSERT(inSuite, sendDelegate.IsOnResponseTimeoutCalled);
 }
 
 void CheckUmhRegistrationTest(nlTestSuite * inSuite, void * inContext)
@@ -111,24 +164,22 @@ void CheckUmhRegistrationTest(nlTestSuite * inSuite, void * inContext)
     CHIP_ERROR err;
     MockAppDelegate mockAppDelegate;
 
-    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForProtocol(Protocols::Id(VendorId::Common, 0x0001),
-                                                                                &mockAppDelegate);
+    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForProtocol(Protocols::BDX::Id, &mockAppDelegate);
     NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 
-    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForType(Protocols::Id(VendorId::Common, 0x0002), 0x0001,
-                                                                            &mockAppDelegate);
+    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForType(Protocols::Echo::Id, kMsgType_TEST1, &mockAppDelegate);
     NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 
-    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForProtocol(Protocols::Id(VendorId::Common, 0x0001));
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForProtocol(Protocols::BDX::Id);
     NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 
-    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForProtocol(Protocols::Id(VendorId::Common, 0x0002));
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForProtocol(Protocols::Echo::Id);
     NL_TEST_ASSERT(inSuite, err != CHIP_NO_ERROR);
 
-    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::Id(VendorId::Common, 0x0002), 0x0001);
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::Echo::Id, kMsgType_TEST1);
     NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 
-    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::Id(VendorId::Common, 0x0002), 0x0002);
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::Echo::Id, kMsgType_TEST2);
     NL_TEST_ASSERT(inSuite, err != CHIP_NO_ERROR);
 }
 
@@ -144,21 +195,24 @@ void CheckExchangeMessages(nlTestSuite * inSuite, void * inContext)
 
     // create unsolicited exchange
     MockAppDelegate mockUnsolicitedAppDelegate;
-    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForType(Protocols::Id(VendorId::Common, 0x0001), 0x0001,
+    err = ctx.GetExchangeManager().RegisterUnsolicitedMessageHandlerForType(Protocols::BDX::Id, kMsgType_TEST1,
                                                                             &mockUnsolicitedAppDelegate);
     NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 
     // send a malicious packet
-    // TODO: https://github.com/project-chip/connectedhomeip/issues/4635
-    // ec1->SendMessage(0x0001, 0x0002, System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
-    //                 SendFlags(Messaging::SendMessageFlags::kNone));
+    ec1->SendMessage(Protocols::BDX::Id, kMsgType_TEST2, System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
+                     SendFlags(Messaging::SendMessageFlags::kNoAutoRequestAck));
     NL_TEST_ASSERT(inSuite, !mockUnsolicitedAppDelegate.IsOnMessageReceivedCalled);
 
+    ec1 = ctx.NewExchangeToPeer(&mockSolicitedAppDelegate);
+
     // send a good packet
-    ec1->SendMessage(Protocols::Id(VendorId::Common, 0x0001), 0x0001,
-                     System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
-                     SendFlags(Messaging::SendMessageFlags::kNone));
+    ec1->SendMessage(Protocols::BDX::Id, kMsgType_TEST1, System::PacketBufferHandle::New(System::PacketBuffer::kMaxSize),
+                     SendFlags(Messaging::SendMessageFlags::kNoAutoRequestAck));
     NL_TEST_ASSERT(inSuite, mockUnsolicitedAppDelegate.IsOnMessageReceivedCalled);
+
+    err = ctx.GetExchangeManager().UnregisterUnsolicitedMessageHandlerForType(Protocols::BDX::Id, kMsgType_TEST1);
+    NL_TEST_ASSERT(inSuite, err == CHIP_NO_ERROR);
 }
 
 // Test Suite
@@ -172,6 +226,8 @@ const nlTest sTests[] =
     NL_TEST_DEF("Test ExchangeMgr::NewContext",               CheckNewContextTest),
     NL_TEST_DEF("Test ExchangeMgr::CheckUmhRegistrationTest", CheckUmhRegistrationTest),
     NL_TEST_DEF("Test ExchangeMgr::CheckExchangeMessages",    CheckExchangeMessages),
+    NL_TEST_DEF("Test OnConnectionExpired basics",            CheckSessionExpirationBasics),
+    NL_TEST_DEF("Test OnConnectionExpired timeout handling",  CheckSessionExpirationTimeout),
 
     NL_TEST_SENTINEL()
 };
@@ -195,16 +251,15 @@ nlTestSuite sSuite =
  */
 int Initialize(void * aContext)
 {
-    CHIP_ERROR err = chip::Platform::MemoryInit();
-    if (err != CHIP_NO_ERROR)
-        return FAILURE;
+    // Initialize System memory and resources
+    VerifyOrReturnError(chip::Platform::MemoryInit() == CHIP_NO_ERROR, FAILURE);
+    VerifyOrReturnError(gIOContext.Init(&sSuite) == CHIP_NO_ERROR, FAILURE);
+    VerifyOrReturnError(gTransportMgr.Init("LOOPBACK") == CHIP_NO_ERROR, FAILURE);
 
-    err = gTransportMgr.Init("LOOPBACK");
-    if (err != CHIP_NO_ERROR)
-        return FAILURE;
+    auto * ctx = static_cast<TestContext *>(aContext);
+    VerifyOrReturnError(ctx->Init(&sSuite, &gTransportMgr, &gIOContext) == CHIP_NO_ERROR, FAILURE);
 
-    err = reinterpret_cast<TestContext *>(aContext)->Init(&sSuite, &gTransportMgr);
-    return (err == CHIP_NO_ERROR) ? SUCCESS : FAILURE;
+    return SUCCESS;
 }
 
 /**
@@ -213,6 +268,7 @@ int Initialize(void * aContext)
 int Finalize(void * aContext)
 {
     CHIP_ERROR err = reinterpret_cast<TestContext *>(aContext)->Shutdown();
+    gIOContext.Shutdown();
     chip::Platform::MemoryShutdown();
     return (err == CHIP_NO_ERROR) ? SUCCESS : FAILURE;
 }

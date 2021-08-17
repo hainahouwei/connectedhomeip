@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import("//build_overrides/chip.gni")
+import("//build_overrides/nlunit_test.gni")
 import("${chip_root}/src/platform/device.gni")
 
 source_set("platform_header") {
@@ -31,6 +32,8 @@ static_library("mdns") {
     "Resolver.h",
     "ServiceNaming.cpp",
     "ServiceNaming.h",
+    "TxtFields.cpp",
+    "TxtFields.h",
   ]
 
   if (chip_mdns == "none") {
@@ -41,7 +44,9 @@ static_library("mdns") {
   } else if (chip_mdns == "minimal") {
     sources += [
       "Advertiser_ImplMinimalMdns.cpp",
-      "Resolver_ImplNone.cpp",
+      "MinimalMdnsServer.cpp",
+      "MinimalMdnsServer.h",
+      "Resolver_ImplMinimalMdns.cpp",
     ]
     public_deps += [ "${chip_root}/src/lib/mdns/minimal" ]
   } else if (chip_mdns == "platform") {

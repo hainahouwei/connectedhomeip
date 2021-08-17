@@ -47,7 +47,7 @@ enum class MsgType : uint8_t
     EchoResponse = 0x02
 };
 
-using EchoFunct = void (*)(Messaging::ExchangeContext * ec, System::PacketBufferHandle payload);
+using EchoFunct = void (*)(Messaging::ExchangeContext * ec, System::PacketBufferHandle && payload);
 
 class DLL_EXPORT EchoClient : public Messaging::ExchangeDelegate
 {
@@ -89,12 +89,15 @@ public:
      *
      * @param payload       A PacketBufferHandle with the payload.
      * @param sendFlags     Flags set by the application for the CHIP message being sent.
+     *                      SendEchoRequest will always add
+     *                      SendMessageFlags::kExpectResponse to the flags.
      *
      * @return CHIP_ERROR_NO_MEMORY if no ExchangeContext is available.
      *         Other CHIP_ERROR codes as returned by the lower layers.
      *
      */
-    CHIP_ERROR SendEchoRequest(System::PacketBufferHandle && payload, const Messaging::SendFlags & sendFlags);
+    CHIP_ERROR SendEchoRequest(System::PacketBufferHandle && payload,
+                               Messaging::SendFlags sendFlags = Messaging::SendFlags(Messaging::SendMessageFlags::kNone));
 
 private:
     Messaging::ExchangeManager * mExchangeMgr = nullptr;
@@ -102,8 +105,8 @@ private:
     EchoFunct OnEchoResponseReceived          = nullptr;
     SecureSessionHandle mSecureSession;
 
-    void OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader, const PayloadHeader & payloadHeader,
-                           System::PacketBufferHandle payload) override;
+    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader,
+                                 const PayloadHeader & payloadHeader, System::PacketBufferHandle && payload) override;
     void OnResponseTimeout(Messaging::ExchangeContext * ec) override;
 };
 
@@ -144,8 +147,8 @@ private:
     Messaging::ExchangeManager * mExchangeMgr = nullptr;
     EchoFunct OnEchoRequestReceived           = nullptr;
 
-    void OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader, const PayloadHeader & payloadHeader,
-                           System::PacketBufferHandle payload) override;
+    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader,
+                                 const PayloadHeader & payloadHeader, System::PacketBufferHandle && payload) override;
     void OnResponseTimeout(Messaging::ExchangeContext * ec) override {}
 };
 

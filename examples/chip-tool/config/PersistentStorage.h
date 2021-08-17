@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <app/util/basic-types.h>
 #include <controller/CHIPDeviceController.h>
 #include <inipp/inipp.h>
 #include <support/logging/CHIPLogging.h>
@@ -28,15 +29,26 @@ public:
     CHIP_ERROR Init();
 
     /////////// PersistentStorageDelegate Interface /////////
-    void SetStorageDelegate(chip::PersistentStorageResultDelegate * delegate) override;
-    CHIP_ERROR SyncGetKeyValue(const char * key, char * value, uint16_t & size) override;
-    void AsyncSetKeyValue(const char * key, const char * value) override;
-    void AsyncDeleteKeyValue(const char * key) override;
+    CHIP_ERROR SyncGetKeyValue(const char * key, void * buffer, uint16_t & size) override;
+    CHIP_ERROR SyncSetKeyValue(const char * key, const void * value, uint16_t size) override;
+    CHIP_ERROR SyncDeleteKeyValue(const char * key) override;
 
     uint16_t GetListenPort();
     chip::Logging::LogCategory GetLoggingLevel();
 
+    // Return the stored node ids, or the default ones if nothing is stored.
+    chip::NodeId GetLocalNodeId();
+    chip::NodeId GetRemoteNodeId();
+
+    // Store node ids.
+    CHIP_ERROR SetLocalNodeId(chip::NodeId nodeId);
+    CHIP_ERROR SetRemoteNodeId(chip::NodeId nodeId);
+
 private:
+    // Helpers for node ids.
+    chip::NodeId GetNodeId(const char * key, chip::NodeId defaultVal);
+    CHIP_ERROR SetNodeId(const char * key, chip::NodeId value);
+
     CHIP_ERROR CommitConfig();
     inipp::Ini<char> mConfig;
 };

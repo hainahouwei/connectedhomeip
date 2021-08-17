@@ -86,7 +86,7 @@ class BluetoothManager {
    */
   suspend fun connect(context: Context, device: BluetoothDevice): BluetoothGatt? {
     return suspendCancellableCoroutine { continuation ->
-      val bluetoothGattCallback = getBluetoothGattCallback(continuation)
+      val bluetoothGattCallback = getBluetoothGattCallback(context, continuation)
 
       Log.i(TAG, "Connecting")
       val gatt = device.connectGatt(context, false, bluetoothGattCallback)
@@ -95,10 +95,11 @@ class BluetoothManager {
   }
 
   private fun getBluetoothGattCallback(
-      continuation: CancellableContinuation<BluetoothGatt?>
+    context: Context,
+    continuation: CancellableContinuation<BluetoothGatt?>
   ): BluetoothGattCallback {
     return object : BluetoothGattCallback() {
-      private val wrappedCallback = ChipClient.getDeviceController().callback
+      private val wrappedCallback = ChipClient.getDeviceController(context).callback
       private val coroutineContinuation = continuation
 
       override fun onConnectionStateChange(
@@ -190,6 +191,6 @@ class BluetoothManager {
 
   companion object {
     private const val TAG = "chip.BluetoothManager"
-    private const val CHIP_UUID = "0000FEAF-0000-1000-8000-00805F9B34FB"
+    private const val CHIP_UUID = "0000FFF6-0000-1000-8000-00805F9B34FB"
   }
 }

@@ -31,8 +31,6 @@
 
 #include <support/logging/CHIPLogging.h>
 
-#include <type_traits>
-
 namespace chip {
 namespace DeviceLayer {
 namespace Internal {
@@ -49,13 +47,6 @@ class BLEManagerImpl final : public BLEManager, private BleLayer, private BlePla
     friend BLEManager;
 
 private:
-    // As a result of https://github.com/zephyrproject-rtos/zephyr/issues/29357, BLE indication
-    // callback parameter type has changed in recent Zephyr revisions. Select the compatible type
-    // below to support both versions for now.
-    using IndicationAttrType =
-        std::conditional_t<std::is_same<bt_gatt_indicate_func_t, void (*)(bt_conn *, bt_gatt_indicate_params *, uint8_t)>::value,
-                           bt_gatt_indicate_params *, const bt_gatt_attr *>;
-
     // ===== Members that implement the BLEManager internal interface.
 
     CHIP_ERROR _Init(void);
@@ -100,6 +91,7 @@ private:
         kAdvertising            = 0x0008, /**< The system is currently CHIPoBLE advertising. */
         kAdvertisingRefreshNeeded =
             0x0010, /**< The advertising state/configuration has changed, but the SoftDevice has yet to be updated. */
+        kChipoBleGattServiceRegister = 0x0020, /**< The system has currently CHIPoBLE GATT service registered. */
     };
 
     struct ServiceData;
@@ -108,7 +100,7 @@ private:
     uint16_t mGAPConns;
     CHIPoBLEServiceMode mServiceMode;
     bool mSubscribedConns[CONFIG_BT_MAX_CONN];
-    bt_gatt_indicate_params mIndicateParams[CONFIG_BT_MAX_CONN];
+    bt_gatt_notify_params mNotifyParams[CONFIG_BT_MAX_CONN];
     bt_conn_cb mConnCallbacks;
 
     void DriveBLEState(void);
@@ -119,7 +111,7 @@ private:
     CHIP_ERROR HandleGAPDisconnect(const ChipDeviceEvent * event);
     CHIP_ERROR HandleRXCharWrite(const ChipDeviceEvent * event);
     CHIP_ERROR HandleTXCharCCCDWrite(const ChipDeviceEvent * event);
-    CHIP_ERROR HandleTXComplete(const ChipDeviceEvent * event);
+    CHIP_ERROR HandleTXCharComplete(const ChipDeviceEvent * event);
     bool IsSubscribed(bt_conn * conn);
     bool SetSubscribed(bt_conn * conn);
     bool UnsetSubscribed(bt_conn * conn);
@@ -128,11 +120,11 @@ private:
     static void DriveBLEState(intptr_t arg);
 
     // Below callbacks run from the system workqueue context and have a limited stack capacity.
-    static void HandleTXIndicated(bt_conn * conn, IndicationAttrType attr, uint8_t err);
+    static void HandleTXCompleted(bt_conn * conn, void * param);
     static void HandleConnect(bt_conn * conn, uint8_t err);
     static void HandleDisconnect(bt_conn * conn, uint8_t reason);
-    static void HandleBLEAdvertisementTimeout(System::Layer * layer, void * param, System::Error error);
-    static void HandleBLEAdvertisementIntervalChange(System::Layer * layer, void * param, System::Error error);
+    static void HandleBLEAdvertisementTimeout(System::Layer * layer, void * param);
+    static void HandleBLEAdvertisementIntervalChange(System::Layer * layer, void * param);
 
     // ===== Members for internal use by the following friends.
 

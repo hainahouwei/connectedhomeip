@@ -24,6 +24,10 @@
 #include <lib/mdns/platform/Mdns.h>
 #include <platform/CHIPDeviceConfig.h>
 
+// Enable detailed mDNS logging for publish
+#undef DETAIL_LOGGING
+// #define DETAIL_LOGGING
+
 namespace chip {
 namespace Mdns {
 
@@ -32,22 +36,33 @@ class DiscoveryImplPlatform : public ServiceAdvertiser, public Resolver
 public:
     CHIP_ERROR Init();
 
+    /// Starts the service advertiser if not yet started. Otherwise, removes all existing services.
     CHIP_ERROR Start(Inet::InetLayer * inetLayer, uint16_t port) override;
+
+    /// Starts the service resolver if not yet started
+    CHIP_ERROR StartResolver(Inet::InetLayer * inetLayer, uint16_t port) override { return Init(); }
 
     /// Advertises the CHIP node as an operational node
     CHIP_ERROR Advertise(const OperationalAdvertisingParameters & params) override;
 
-    /// Advertises the CHIP node as a commisioning/commissionable node
+    /// Advertises the CHIP node as a commissioner/commissionable node
     CHIP_ERROR Advertise(const CommissionAdvertisingParameters & params) override;
 
     /// This function stops publishing the device on mDNS.
-    CHIP_ERROR StopPublishDevice();
+    CHIP_ERROR StopPublishDevice() override;
+
+    /// Returns DNS-SD instance name formatted as hex string
+    CHIP_ERROR GetCommissionableInstanceName(char * instanceName, size_t maxLength) override;
 
     /// Registers a resolver delegate if none has been registered before
     CHIP_ERROR SetResolverDelegate(ResolverDelegate * delegate) override;
 
     /// Requests resolution of a node ID to its address
-    CHIP_ERROR ResolveNodeId(uint64_t nodeId, uint64_t fabricId, Inet::IPAddressType type) override;
+    CHIP_ERROR ResolveNodeId(const PeerId & peerId, Inet::IPAddressType type) override;
+
+    CHIP_ERROR FindCommissionableNodes(DiscoveryFilter filter = DiscoveryFilter()) override;
+
+    CHIP_ERROR FindCommissioners(DiscoveryFilter filter = DiscoveryFilter()) override;
 
     static DiscoveryImplPlatform & GetInstance();
 
@@ -59,18 +74,24 @@ private:
 
     CHIP_ERROR PublishUnprovisionedDevice(chip::Inet::IPAddressType addressType, chip::Inet::InterfaceId interface);
     CHIP_ERROR PublishProvisionedDevice(chip::Inet::IPAddressType addressType, chip::Inet::InterfaceId interface);
-    CHIP_ERROR SetupHostname();
 
     static void HandleNodeIdResolve(void * context, MdnsService * result, CHIP_ERROR error);
     static void HandleMdnsInit(void * context, CHIP_ERROR initError);
     static void HandleMdnsError(void * context, CHIP_ERROR initError);
+    static void HandleNodeBrowse(void * context, MdnsService * services, size_t servicesSize, CHIP_ERROR error);
+    static void HandleNodeResolve(void * context, MdnsService * result, CHIP_ERROR error);
     static CHIP_ERROR GenerateRotatingDeviceId(char rotatingDeviceIdHexBuffer[], size_t & rotatingDeviceIdHexBufferSize);
+#ifdef DETAIL_LOGGING
+    static void PrintEntries(const MdnsService * service);
+#endif
 
     OperationalAdvertisingParameters mOperationalAdvertisingParams;
-    bool mIsOperationalPublishing = false;
+    CommissionAdvertisingParameters mCommissionableNodeAdvertisingParams;
+    CommissionAdvertisingParameters mCommissionerAdvertisingParams;
+    bool mIsOperationalPublishing        = false;
+    bool mIsCommissionableNodePublishing = false;
+    bool mIsCommissionerPublishing       = false;
     uint64_t mCommissionInstanceName;
-    CommissionAdvertisingParameters mCommissioningdvertisingParams;
-    bool mIsCommissionalPublishing = false;
 
     bool mMdnsInitialized                = false;
     ResolverDelegate * mResolverDelegate = nullptr;

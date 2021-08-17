@@ -15,89 +15,91 @@
  *    limitations under the License.
  */
 
-#include <array>
-#include <limits.h>
-#include <string.h>
+#include <platform/internal/CHIPDeviceLayerInternal.h>
+#include <platform/internal/DeviceNetworkInfo.h>
 
-#include "platform/internal/CHIPDeviceLayerInternal.h"
-#include "platform/internal/DeviceNetworkInfo.h"
-
-#include "platform/PlatformManager.h"
-#include "platform/ThreadStackManager.h"
-#include "support/CodeUtils.h"
-#include "support/logging/CHIPLogging.h"
-
-#include "dbus/client/thread_api_dbus.hpp"
-
-using chip::DeviceLayer::Internal::DeviceNetworkInfo;
-using otbr::DBus::ClientError;
-using otbr::DBus::DeviceRole;
-using otbr::DBus::LinkModeConfig;
-using otbr::DBus::NeighborInfo;
-
-#ifndef CHIP_CONFIG_OTBR_CLIENT_ERROR_MIN
-#define CHIP_CONFIG_OTBR_CLIENT_ERROR_MIN 8000000
-#endif
-
-#define OTBR_TO_CHIP_ERROR(x)                                                                                                      \
-    (x == ClientError::ERROR_NONE ? CHIP_NO_ERROR : _CHIP_ERROR(CHIP_CONFIG_OTBR_CLIENT_ERROR_MIN + static_cast<int>(x)))
-
-#define LogClientError(error)                                                                                                      \
-    do                                                                                                                             \
-    {                                                                                                                              \
-        if (error != ClientError::ERROR_NONE)                                                                                      \
-        {                                                                                                                          \
-            ChipLogError(DeviceLayer, __FILE__ " %d: Otbr ClientError %d", __LINE__, static_cast<int>(error));                     \
-        }                                                                                                                          \
-    } while (0)
-
-constexpr int kDBusConnectionPollingTimeoutMS = 10;
+#include <platform/PlatformManager.h>
+#include <platform/ThreadStackManager.h>
+#include <support/CodeUtils.h>
+#include <support/logging/CHIPLogging.h>
 
 namespace chip {
 namespace DeviceLayer {
 
 ThreadStackManagerImpl ThreadStackManagerImpl::sInstance;
 
-ThreadStackManagerImpl::ThreadStackManagerImpl() : mThreadApi(nullptr), mConnection(nullptr), mNetworkInfo(), mAttached(false) {}
+constexpr char ThreadStackManagerImpl::kDBusOpenThreadService[];
+constexpr char ThreadStackManagerImpl::kDBusOpenThreadObjectPath[];
+
+constexpr char ThreadStackManagerImpl::kOpenthreadDeviceRoleDisabled[];
+constexpr char ThreadStackManagerImpl::kOpenthreadDeviceRoleDetached[];
+constexpr char ThreadStackManagerImpl::kOpenthreadDeviceRoleChild[];
+constexpr char ThreadStackManagerImpl::kOpenthreadDeviceRoleRouter[];
+constexpr char ThreadStackManagerImpl::kOpenthreadDeviceRoleLeader[];
+
+constexpr char ThreadStackManagerImpl::kPropertyDeviceRole[];
+
+ThreadStackManagerImpl::ThreadStackManagerImpl() : mAttached(false) {}
 
 CHIP_ERROR ThreadStackManagerImpl::_InitThreadStack()
 {
-    ClientError error;
-    DeviceRole role;
-    DBusError dbusError;
-    DBusConnection * dispatchConnection;
+    std::unique_ptr<GError, GErrorDeleter> err;
+    mProxy.reset(openthread_io_openthread_border_router_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM, G_DBUS_PROXY_FLAGS_NONE,
+                                                                               kDBusOpenThreadService, kDBusOpenThreadObjectPath,
+                                                                               nullptr, &MakeUniquePointerReceiver(err).Get()));
+    if (!mProxy)
+    {
+        ChipLogError(DeviceLayer, "openthread: failed to create openthread dbus proxy %s", err ? err->message : "unknown error");
+        return CHIP_ERROR_INTERNAL;
+    }
 
-    dbus_error_init(&dbusError);
-    mConnection = UniqueDBusConnection(dbus_bus_get_private(DBUS_BUS_SYSTEM, &dbusError));
+    g_signal_connect(mProxy.get(), "g-properties-changed", G_CALLBACK(OnDbusPropertiesChanged), this);
 
-    VerifyOrExit(mConnection != nullptr, error = ClientError::ERROR_DBUS);
-    mThreadApi = std::unique_ptr<otbr::DBus::ThreadApiDBus>(new otbr::DBus::ThreadApiDBus(mConnection.get()));
-    mThreadApi->AddDeviceRoleHandler([this](DeviceRole newRole) { this->_ThreadDevcieRoleChangedHandler(newRole); });
+    // If get property is called inside dbus thread (we are going to make it so), XXX_get_XXX can be used instead of XXX_dup_XXX
+    // which is a little bit faster and the returned object doesn't need to be freed. Same for all following get properties.
+    std::unique_ptr<gchar, GFree> role(openthread_io_openthread_border_router_dup_device_role(mProxy.get()));
+    if (role)
+    {
+        ThreadDevcieRoleChangedHandler(role.get());
+    }
 
-    SuccessOrExit(error = mThreadApi->GetDeviceRole(role));
-    _ThreadDevcieRoleChangedHandler(role);
-    mAttached = (role != DeviceRole::OTBR_DEVICE_ROLE_DETACHED && role != DeviceRole::OTBR_DEVICE_ROLE_DISABLED);
-
-    dispatchConnection = mConnection.get();
-    mDBusEventLoop     = std::thread([dispatchConnection]() {
-        while (true)
-        {
-            // The dbus_connection_read_write will lock the connection until new message comes or timeout.
-            // This will block ot-br-posix APIs. Set timeout to 10ms so it can work.
-            // TODO: we should have a global event loop for dbus to take care of this.
-            dbus_connection_read_write_dispatch(dispatchConnection, kDBusConnectionPollingTimeoutMS);
-        }
-    });
-    mDBusEventLoop.detach();
-exit:
-    dbus_error_free(&dbusError);
-    LogClientError(error);
-    return OTBR_TO_CHIP_ERROR(error);
+    return CHIP_NO_ERROR;
 }
 
-void ThreadStackManagerImpl::_ThreadDevcieRoleChangedHandler(DeviceRole role)
+void ThreadStackManagerImpl::OnDbusPropertiesChanged(OpenthreadIoOpenthreadBorderRouter * proxy, GVariant * changed_properties,
+                                                     const gchar * const * invalidated_properties, gpointer user_data)
 {
-    bool attached         = (role != DeviceRole::OTBR_DEVICE_ROLE_DETACHED && role != DeviceRole::OTBR_DEVICE_ROLE_DISABLED);
+    ThreadStackManagerImpl * me = reinterpret_cast<ThreadStackManagerImpl *>(user_data);
+    if (g_variant_n_children(changed_properties) > 0)
+    {
+        const gchar * key;
+        GVariant * value;
+
+        std::unique_ptr<GVariantIter, GVariantIterDeleter> iter;
+        g_variant_get(changed_properties, "a{sv}", &MakeUniquePointerReceiver(iter).Get());
+        if (!iter)
+            return;
+        while (g_variant_iter_loop(iter.get(), "{&sv}", &key, &value))
+        {
+            if (key == nullptr || value == nullptr)
+                continue;
+            // ownership of key and value is still holding by the iter
+            if (strcmp(key, kPropertyDeviceRole) == 0)
+            {
+                const gchar * value_str = g_variant_get_string(value, nullptr);
+                if (value_str == nullptr)
+                    continue;
+                ChipLogProgress(DeviceLayer, "Thread role changed to: %s", value_str);
+                me->ThreadDevcieRoleChangedHandler(value_str);
+            }
+        }
+    }
+}
+
+void ThreadStackManagerImpl::ThreadDevcieRoleChangedHandler(const gchar * role)
+{
+    bool attached = strcmp(role, kOpenthreadDeviceRoleDetached) != 0 && strcmp(role, kOpenthreadDeviceRoleDisabled) != 0;
+
     ChipDeviceEvent event = ChipDeviceEvent{};
 
     if (attached != mAttached)
@@ -107,6 +109,7 @@ void ThreadStackManagerImpl::_ThreadDevcieRoleChangedHandler(DeviceRole role)
             attached ? ConnectivityChange::kConnectivity_Established : ConnectivityChange::kConnectivity_Lost;
         PlatformMgr().PostEvent(&event);
     }
+    mAttached = attached;
 
     event.Type                          = DeviceEventType::kThreadStateChange;
     event.ThreadStateChange.RoleChanged = true;
@@ -115,47 +118,71 @@ void ThreadStackManagerImpl::_ThreadDevcieRoleChangedHandler(DeviceRole role)
 
 void ThreadStackManagerImpl::_ProcessThreadActivity() {}
 
-static bool RouteMatch(const otbr::DBus::Ip6Prefix & prefix, const Inet::IPAddress & addr)
-{
-    bool match = true;
-    const uint8_t * prefixBuffer;
-    const uint8_t * addrBuffer;
-    uint8_t wholeBytes  = prefix.mLength / CHAR_BIT;
-    uint8_t pendingBits = prefix.mLength % CHAR_BIT;
-
-    VerifyOrExit(addr.IsIPv6(), match = false);
-    VerifyOrExit(prefix.mLength > 0, match = false);
-
-    prefixBuffer = static_cast<const uint8_t *>(&prefix.mPrefix[0]);
-    addrBuffer   = reinterpret_cast<const uint8_t *>(&addr.Addr);
-    VerifyOrExit(memcmp(addrBuffer, prefixBuffer, wholeBytes) == 0, match = false);
-    if (pendingBits)
-    {
-        uint8_t mask = static_cast<uint8_t>(((UINT8_MAX >> pendingBits) << (CHAR_BIT - pendingBits)));
-
-        VerifyOrExit((addrBuffer[wholeBytes] & mask) == (addrBuffer[wholeBytes] & mask), match = false);
-    }
-    VerifyOrExit(memcmp(addrBuffer, prefixBuffer, wholeBytes) == 0, match = false);
-
-exit:
-    return match;
-}
-
 bool ThreadStackManagerImpl::_HaveRouteToAddress(const Inet::IPAddress & destAddr)
 {
-    std::vector<otbr::DBus::ExternalRoute> routes;
-    bool match = false;
-
-    VerifyOrExit(mThreadApi->GetExternalRoutes(routes) == ClientError::ERROR_NONE, match = false);
-    VerifyOrExit(_IsThreadAttached(), match = false);
-    VerifyOrExit(destAddr.IsIPv6LinkLocal(), match = true);
-    for (const auto & route : routes)
+    if (!mProxy || !_IsThreadAttached())
     {
-        VerifyOrExit(!(match = RouteMatch(route.mPrefix, destAddr)), );
+        return false;
+    }
+    if (destAddr.IsIPv6LinkLocal())
+    {
+        return true;
     }
 
-exit:
-    return match;
+    std::unique_ptr<GVariant, GVariantDeleter> routes(openthread_io_openthread_border_router_dup_external_routes(mProxy.get()));
+    if (!routes)
+        return false;
+
+    if (g_variant_n_children(routes.get()) > 0)
+    {
+        std::unique_ptr<GVariantIter, GVariantIterDeleter> iter;
+        g_variant_get(routes.get(), "av", &MakeUniquePointerReceiver(iter).Get());
+        if (!iter)
+            return false;
+
+        GVariant * route;
+        while (g_variant_iter_loop(iter.get(), "&v", &route))
+        {
+            if (route == nullptr)
+                continue;
+            std::unique_ptr<GVariant, GVariantDeleter> prefix;
+            guint16 rloc16;
+            guchar preference;
+            gboolean stable;
+            gboolean nextHopIsThisDevice;
+            g_variant_get(route, "(&vqybb)", &MakeUniquePointerReceiver(prefix).Get(), &rloc16, &preference, &stable,
+                          &nextHopIsThisDevice);
+            if (!prefix)
+                continue;
+
+            std::unique_ptr<GVariant, GVariantDeleter> address;
+            guchar prefixLength;
+            g_variant_get(prefix.get(), "(&vy)", &MakeUniquePointerReceiver(address).Get(), &prefixLength);
+            if (!address)
+                continue;
+
+            GBytes * bytes = g_variant_get_data_as_bytes(address.get()); // the ownership still hold by address
+            if (bytes == nullptr)
+                continue;
+            gsize size;
+            gconstpointer data = g_bytes_get_data(bytes, &size);
+            if (data == nullptr)
+                continue;
+            if (size != sizeof(struct in6_addr))
+                continue;
+
+            Inet::IPPrefix p;
+            p.IPAddr = Inet::IPAddress::FromIPv6(*reinterpret_cast<const struct in6_addr *>(data));
+            p.Length = prefixLength;
+
+            if (p.MatchAddress(destAddr))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 void ThreadStackManagerImpl::_OnPlatformEvent(const ChipDeviceEvent * event)
@@ -165,67 +192,68 @@ void ThreadStackManagerImpl::_OnPlatformEvent(const ChipDeviceEvent * event)
     // isn't much to do in the Chip stack.
 }
 
-CHIP_ERROR ThreadStackManagerImpl::_SetThreadProvision(const Internal::DeviceNetworkInfo & netInfo)
+CHIP_ERROR ThreadStackManagerImpl::_SetThreadProvision(ByteSpan netInfo)
 {
-    mNetworkInfo = netInfo;
+    VerifyOrReturnError(mProxy, CHIP_ERROR_INCORRECT_STATE);
+    VerifyOrReturnError(Thread::OperationalDataset::IsValid(netInfo), CHIP_ERROR_INVALID_ARGUMENT);
 
-    // post an event alerting other subsystems about change in provisioning state
-    ChipDeviceEvent event;
-    event.Type                                           = DeviceEventType::kServiceProvisioningChange;
-    event.ServiceProvisioningChange.IsServiceProvisioned = true;
-    PlatformMgr().PostEvent(&event);
-
-    return CHIP_NO_ERROR;
-}
-
-CHIP_ERROR ThreadStackManagerImpl::_SetThreadProvision(const uint8_t * operationalDataset, size_t operationalDatasetLen)
-{
-    mOperationalDatasetTlv = std::vector<uint8_t>(operationalDataset, operationalDataset + operationalDatasetLen);
-
-    // post an event alerting other subsystems about change in provisioning state
-    ChipDeviceEvent event;
-    event.Type                                           = DeviceEventType::kServiceProvisioningChange;
-    event.ServiceProvisioningChange.IsServiceProvisioned = true;
-    PlatformMgr().PostEvent(&event);
-
-    return CHIP_NO_ERROR;
-}
-
-CHIP_ERROR ThreadStackManagerImpl::_GetThreadProvision(Internal::DeviceNetworkInfo & netInfo, bool includeCredentials)
-{
-    netInfo = mNetworkInfo;
-
-    if (!includeCredentials)
     {
-        memset(&netInfo.ThreadMasterKey, 0, sizeof(netInfo.ThreadMasterKey));
-        memset(&netInfo.ThreadPSKc, 0, sizeof(netInfo.ThreadPSKc));
-        netInfo.FieldPresent.ThreadPSKc = false;
+        std::unique_ptr<GBytes, GBytesDeleter> bytes(g_bytes_new(netInfo.data(), netInfo.size()));
+        if (!bytes)
+            return CHIP_ERROR_NO_MEMORY;
+        std::unique_ptr<GVariant, GVariantDeleter> value(
+            g_variant_new_from_bytes(G_VARIANT_TYPE_BYTESTRING, bytes.release(), true));
+        if (!value)
+            return CHIP_ERROR_NO_MEMORY;
+        openthread_io_openthread_border_router_set_active_dataset_tlvs(mProxy.get(), value.release());
     }
+
+    // post an event alerting other subsystems about change in provisioning state
+    ChipDeviceEvent event;
+    event.Type                                           = DeviceEventType::kServiceProvisioningChange;
+    event.ServiceProvisioningChange.IsServiceProvisioned = true;
+    PlatformMgr().PostEvent(&event);
+
+    return CHIP_NO_ERROR;
+}
+
+CHIP_ERROR ThreadStackManagerImpl::_GetThreadProvision(ByteSpan & netInfo)
+{
+    VerifyOrReturnError(mProxy, CHIP_ERROR_INCORRECT_STATE);
+
+    {
+        std::unique_ptr<GVariant, GVariantDeleter> value(
+            openthread_io_openthread_border_router_dup_active_dataset_tlvs(mProxy.get()));
+        GBytes * bytes = g_variant_get_data_as_bytes(value.get());
+        gsize size;
+        const uint8_t * data = reinterpret_cast<const uint8_t *>(g_bytes_get_data(bytes, &size));
+        ReturnErrorOnFailure(mDataset.Init(ByteSpan(data, size)));
+    }
+
+    netInfo = mDataset.AsByteSpan();
 
     return CHIP_NO_ERROR;
 }
 
 bool ThreadStackManagerImpl::_IsThreadProvisioned()
 {
-    return mNetworkInfo.ThreadNetworkName[0] != '\0';
+    return static_cast<Thread::OperationalDataset &>(mDataset).IsCommissioned();
 }
 
 void ThreadStackManagerImpl::_ErasePersistentInfo()
 {
-    mNetworkInfo = Internal::DeviceNetworkInfo{};
+    static_cast<Thread::OperationalDataset &>(mDataset).Clear();
 }
 
 bool ThreadStackManagerImpl::_IsThreadEnabled()
 {
-    bool enabled = false;
-    DeviceRole role;
-    ClientError error;
+    if (!mProxy)
+    {
+        return false;
+    }
 
-    SuccessOrExit(error = mThreadApi->GetDeviceRole(role));
-    enabled = (role != DeviceRole::OTBR_DEVICE_ROLE_DISABLED);
-exit:
-    LogClientError(error);
-    return enabled;
+    std::unique_ptr<gchar, GFree> role(openthread_io_openthread_border_router_dup_device_role(mProxy.get()));
+    return (strcmp(role.get(), kOpenthreadDeviceRoleDisabled) != 0);
 }
 
 bool ThreadStackManagerImpl::_IsThreadAttached()
@@ -235,126 +263,116 @@ bool ThreadStackManagerImpl::_IsThreadAttached()
 
 CHIP_ERROR ThreadStackManagerImpl::_SetThreadEnabled(bool val)
 {
-    ClientError error = ClientError::ERROR_NONE;
-
+    VerifyOrReturnError(mProxy, CHIP_ERROR_INCORRECT_STATE);
     if (val)
     {
-        if (mOperationalDatasetTlv.size() > 0)
+        std::unique_ptr<GError, GErrorDeleter> err;
+        gboolean result =
+            openthread_io_openthread_border_router_call_attach_sync(mProxy.get(), nullptr, &MakeUniquePointerReceiver(err).Get());
+        if (err)
         {
-            SuccessOrExit(error = mThreadApi->SetActiveDatasetTlvs(mOperationalDatasetTlv));
-            SuccessOrExit(error = mThreadApi->Attach([](ClientError result) {
-                // ThreadDevcieRoleChangedHandler should take care of this, so we don't emit another event.
-                ChipLogProgress(DeviceLayer, "Thread attach result %d", result);
-            }));
+            ChipLogError(DeviceLayer, "openthread: _SetThreadEnabled calling %s failed: %s", "Attach", err->message);
+            return CHIP_ERROR_INTERNAL;
         }
-        else
+
+        if (!result)
         {
-            std::vector<uint8_t> masterkey(std::begin(mNetworkInfo.ThreadMasterKey), std::end(mNetworkInfo.ThreadMasterKey));
-            std::vector<uint8_t> pskc;
-            uint64_t extPanId    = UINT64_MAX;
-            uint32_t channelMask = UINT32_MAX;
-
-            if (mNetworkInfo.FieldPresent.ThreadExtendedPANId)
-            {
-                extPanId = 0;
-                for (size_t i = 0; i < extPanId; i++)
-                {
-                    extPanId <<= CHAR_BIT;
-                    extPanId |= mNetworkInfo.ThreadExtendedPANId[i];
-                }
-            }
-            if (mNetworkInfo.FieldPresent.ThreadPSKc)
-            {
-                pskc = std::vector<uint8_t>(std::begin(mNetworkInfo.ThreadPSKc), std::end(mNetworkInfo.ThreadPSKc));
-            }
-            if (mNetworkInfo.ThreadChannel != Internal::kThreadChannel_NotSpecified)
-            {
-                channelMask = 1 << mNetworkInfo.ThreadChannel;
-            }
-
-            if (mNetworkInfo.FieldPresent.ThreadMeshPrefix)
-            {
-                std::array<uint8_t, Internal::kThreadMeshPrefixLength> prefix;
-
-                std::copy(std::begin(mNetworkInfo.ThreadMeshPrefix), std::end(mNetworkInfo.ThreadMeshPrefix), std::begin(prefix));
-                SuccessOrExit(error = mThreadApi->SetMeshLocalPrefix(prefix));
-            }
-
-            mThreadApi->Attach(mNetworkInfo.ThreadNetworkName, mNetworkInfo.ThreadPANId, extPanId, masterkey, pskc, channelMask,
-                               [](ClientError result) { ChipLogProgress(DeviceLayer, "Thread attach result %d", result); });
+            ChipLogError(DeviceLayer, "openthread: _SetThreadEnabled calling %s failed: %s", "Attach", "return false");
+            return CHIP_ERROR_INTERNAL;
         }
     }
     else
     {
-        mThreadApi->Reset();
+        std::unique_ptr<GError, GErrorDeleter> err;
+        gboolean result =
+            openthread_io_openthread_border_router_call_reset_sync(mProxy.get(), nullptr, &MakeUniquePointerReceiver(err).Get());
+        if (err)
+        {
+            ChipLogError(DeviceLayer, "openthread: _SetThreadEnabled calling %s failed: %s", "Reset", err->message);
+            return CHIP_ERROR_INTERNAL;
+        }
+
+        if (!result)
+        {
+            ChipLogError(DeviceLayer, "openthread: _SetThreadEnabled calling %s failed: %s", "Reset", "return false");
+            return CHIP_ERROR_INTERNAL;
+        }
     }
-exit:
-    LogClientError(error);
-    return OTBR_TO_CHIP_ERROR(error);
+    return CHIP_NO_ERROR;
 }
 
 ConnectivityManager::ThreadDeviceType ThreadStackManagerImpl::_GetThreadDeviceType()
 {
-    ClientError error;
-    DeviceRole role;
-    LinkModeConfig linkMode;
     ConnectivityManager::ThreadDeviceType type = ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
-
-    SuccessOrExit(error = mThreadApi->GetDeviceRole(role));
-
-    switch (role)
+    if (!mProxy)
     {
-    case DeviceRole::OTBR_DEVICE_ROLE_DISABLED:
-    case DeviceRole::OTBR_DEVICE_ROLE_DETACHED:
-        break;
-    case DeviceRole::OTBR_DEVICE_ROLE_CHILD:
-        SuccessOrExit(error = mThreadApi->GetLinkMode(linkMode));
-        if (!linkMode.mRxOnWhenIdle)
+        ChipLogError(DeviceLayer, "Cannot get device role with Thread api client: %s", "");
+        return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
+    }
+
+    std::unique_ptr<gchar, GFree> role(openthread_io_openthread_border_router_dup_device_role(mProxy.get()));
+    if (!role)
+        return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
+    if (strcmp(role.get(), kOpenthreadDeviceRoleDetached) == 0 || strcmp(role.get(), kOpenthreadDeviceRoleDisabled) == 0)
+    {
+        return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
+    }
+    else if (strcmp(role.get(), kOpenthreadDeviceRoleChild) == 0)
+    {
+        std::unique_ptr<GVariant, GVariantDeleter> linkMode(openthread_io_openthread_border_router_dup_link_mode(mProxy.get()));
+        if (!linkMode)
+            return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
+        gboolean rx_on_when_idle;
+        gboolean device_type;
+        gboolean network_data;
+        g_variant_get(linkMode.get(), "(bbb)", &rx_on_when_idle, &device_type, &network_data);
+        if (!rx_on_when_idle)
         {
             type = ConnectivityManager::ThreadDeviceType::kThreadDeviceType_SleepyEndDevice;
         }
         else
         {
-            type = linkMode.mDeviceType ? ConnectivityManager::ThreadDeviceType::kThreadDeviceType_FullEndDevice
-                                        : ConnectivityManager::ThreadDeviceType::kThreadDeviceType_MinimalEndDevice;
+            type = device_type ? ConnectivityManager::ThreadDeviceType::kThreadDeviceType_FullEndDevice
+                               : ConnectivityManager::ThreadDeviceType::kThreadDeviceType_MinimalEndDevice;
         }
-        break;
-    case DeviceRole::OTBR_DEVICE_ROLE_ROUTER:
-    case DeviceRole::OTBR_DEVICE_ROLE_LEADER:
-        type = ConnectivityManager::ThreadDeviceType::kThreadDeviceType_Router;
-        break;
-    default:
-        ChipLogError(DeviceLayer, "Unknown Thread role: %d", static_cast<int>(role));
-        break;
+        return type;
     }
-
-exit:
-    LogClientError(error);
-    return type;
+    else if (strcmp(role.get(), kOpenthreadDeviceRoleLeader) == 0 || strcmp(role.get(), kOpenthreadDeviceRoleRouter) == 0)
+    {
+        return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_Router;
+    }
+    else
+    {
+        ChipLogError(DeviceLayer, "Unknown Thread role: %s", role.get());
+        return ConnectivityManager::ThreadDeviceType::kThreadDeviceType_NotSupported;
+    }
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_SetThreadDeviceType(ConnectivityManager::ThreadDeviceType deviceType)
 {
-    LinkModeConfig linkMode{ true, true, true };
-    ClientError error = ClientError::ERROR_NONE;
-
+    gboolean rx_on_when_idle = true;
+    gboolean device_type     = true;
+    gboolean network_data    = true;
+    VerifyOrReturnError(mProxy, CHIP_ERROR_INCORRECT_STATE);
     if (deviceType == ConnectivityManager::ThreadDeviceType::kThreadDeviceType_MinimalEndDevice)
     {
-        linkMode.mNetworkData = false;
+        network_data = false;
     }
     else if (deviceType == ConnectivityManager::ThreadDeviceType::kThreadDeviceType_SleepyEndDevice)
     {
-        linkMode.mRxOnWhenIdle = false;
-        linkMode.mNetworkData  = false;
+        rx_on_when_idle = false;
+        network_data    = false;
     }
 
-    if (!linkMode.mNetworkData)
+    if (!network_data)
     {
-        error = mThreadApi->SetLinkMode(linkMode);
+        std::unique_ptr<GVariant, GVariantDeleter> linkMode(g_variant_new("(bbb)", rx_on_when_idle, device_type, network_data));
+        if (!linkMode)
+            return CHIP_ERROR_NO_MEMORY;
+        openthread_io_openthread_border_router_set_link_mode(mProxy.get(), linkMode.release());
     }
 
-    LogClientError(error);
-    return OTBR_TO_CHIP_ERROR(error);
+    return CHIP_NO_ERROR;
 }
 
 void ThreadStackManagerImpl::_GetThreadPollingConfig(ConnectivityManager::ThreadPollingConfig & pollingConfig)
@@ -374,31 +392,13 @@ CHIP_ERROR ThreadStackManagerImpl::_SetThreadPollingConfig(const ConnectivityMan
 
 bool ThreadStackManagerImpl::_HaveMeshConnectivity()
 {
-    DeviceRole role;
-    ClientError error;
-    bool hasConnectivity = false;
-    std::vector<NeighborInfo> neighbors;
+    // TODO: Remove Weave legacy APIs
+    // For a leader with a child, the child is considered to have mesh connectivity
+    // and the leader is not, which is a very confusing definition.
+    // This API is Weave legacy and should be removed.
 
-    SuccessOrExit(error = mThreadApi->GetDeviceRole(role));
-    VerifyOrExit(role != DeviceRole::OTBR_DEVICE_ROLE_DETACHED && role != DeviceRole::OTBR_DEVICE_ROLE_DISABLED, );
-    if (role == DeviceRole::OTBR_DEVICE_ROLE_CHILD || role == DeviceRole::OTBR_DEVICE_ROLE_ROUTER)
-    {
-        hasConnectivity = true;
-    }
-
-    SuccessOrExit(error = mThreadApi->GetNeighborTable(neighbors));
-    for (const auto & neighbor : neighbors)
-    {
-        if (!neighbor.mIsChild)
-        {
-            hasConnectivity = true;
-            break;
-        }
-    }
-
-exit:
-    LogClientError(error);
-    return hasConnectivity;
+    ChipLogError(DeviceLayer, "HaveMeshConnectivity has confusing behavior and shouldn't be called");
+    return false;
 }
 
 void ThreadStackManagerImpl::_OnMessageLayerActivityChanged(bool messageLayerIsActive)
@@ -406,33 +406,28 @@ void ThreadStackManagerImpl::_OnMessageLayerActivityChanged(bool messageLayerIsA
     (void) messageLayerIsActive;
 }
 
-void ThreadStackManagerImpl::_OnCHIPoBLEAdvertisingStart() {}
-
-void ThreadStackManagerImpl::_OnCHIPoBLEAdvertisingStop() {}
-
 CHIP_ERROR ThreadStackManagerImpl::_GetAndLogThreadStatsCounters()
 {
-    // TODO: implement after we decide on the profiling protocol
+    // TODO: Remove Weave legacy APIs
     return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_GetAndLogThreadTopologyMinimal()
 {
-    // TODO: implement after we decide on the profiling protocol
+    // TODO: Remove Weave legacy APIs
     return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_GetAndLogThreadTopologyFull()
 {
-    // TODO: implement after we decide on the profiling protocol
+    // TODO: Remove Weave legacy APIs
     return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_GetPrimary802154MACAddress(uint8_t * buf)
 {
-    uint64_t extAddr;
-    ClientError error;
-    SuccessOrExit(error = mThreadApi->GetExtendedAddress(extAddr));
+    VerifyOrReturnError(mProxy, CHIP_ERROR_INCORRECT_STATE);
+    guint64 extAddr = openthread_io_openthread_border_router_get_extended_address(mProxy.get());
 
     for (size_t i = 0; i < sizeof(extAddr); i++)
     {
@@ -440,23 +435,24 @@ CHIP_ERROR ThreadStackManagerImpl::_GetPrimary802154MACAddress(uint8_t * buf)
         extAddr >>= CHAR_BIT;
     }
 
-exit:
-    LogClientError(error);
-    return OTBR_TO_CHIP_ERROR(error);
-}
-
-CHIP_ERROR ThreadStackManagerImpl::_GetFactoryAssignedEUI64(uint8_t (&buf)[8])
-{
-    return CHIP_ERROR_NOT_IMPLEMENTED;
+    return CHIP_NO_ERROR;
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_GetExternalIPv6Address(chip::Inet::IPAddress & addr)
 {
+    // TODO: Remove Weave legacy APIs
+    return CHIP_ERROR_NOT_IMPLEMENTED;
+}
+
+CHIP_ERROR ThreadStackManagerImpl::_GetPollPeriod(uint32_t & buf)
+{
+    // TODO: Remove Weave legacy APIs
     return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 
 CHIP_ERROR ThreadStackManagerImpl::_JoinerStart()
 {
+    // TODO: Remove Weave legacy APIs
     return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 

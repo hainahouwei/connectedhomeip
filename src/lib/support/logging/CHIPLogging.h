@@ -40,6 +40,7 @@
 
 #include <support/logging/Constants.h>
 
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdint.h>
 
@@ -71,8 +72,21 @@ using LogRedirectCallback_t = void (*)(const char * module, uint8_t category, co
 
 void SetLogRedirectCallback(LogRedirectCallback_t callback);
 
+/**
+ * gcc and clang provide a way to warn for a custom formatter when formats don't
+ * match arguments.  Use that for Log() so we catch mistakes.  The "format"
+ * attribute takes the type of format, which arg is the format string, and which
+ * arg is the first variadic arg, with both arg numbers 1-based.
+ */
+
+#if defined(__GNUC__)
+#define ENFORCE_FORMAT(n, m) __attribute__((format(printf, n, m)))
+#else                        // __GNUC__
+#define ENFORCE_FORMAT(n, m) /* How to do with MSVC? */
+#endif                       // __GNUC__
+
 void LogV(uint8_t module, uint8_t category, const char * msg, va_list args);
-void Log(uint8_t module, uint8_t category, const char * msg, ...);
+void Log(uint8_t module, uint8_t category, const char * msg, ...) ENFORCE_FORMAT(3, 4);
 
 uint8_t GetLogFilter();
 void SetLogFilter(uint8_t category);
@@ -99,7 +113,7 @@ void SetLogFilter(uint8_t category);
     chip::Logging::Log(chip::Logging::kLogModule_##MOD, chip::Logging::kLogCategory_Error, MSG, ##__VA_ARGS__)
 #endif
 #else
-#define ChipLogError(MOD, MSG, ...)
+#define ChipLogError(MOD, MSG, ...) ((void) 0)
 #endif
 
 #ifndef CHIP_PROGRESS_LOGGING
@@ -120,7 +134,7 @@ void SetLogFilter(uint8_t category);
     chip::Logging::Log(chip::Logging::kLogModule_##MOD, chip::Logging::kLogCategory_Progress, MSG, ##__VA_ARGS__)
 #endif
 #else
-#define ChipLogProgress(MOD, MSG, ...)
+#define ChipLogProgress(MOD, MSG, ...) ((void) 0)
 #endif
 
 #ifndef CHIP_DETAIL_LOGGING
@@ -141,7 +155,7 @@ void SetLogFilter(uint8_t category);
     chip::Logging::Log(chip::Logging::kLogModule_##MOD, chip::Logging::kLogCategory_Detail, MSG, ##__VA_ARGS__)
 #endif
 #else
-#define ChipLogDetail(MOD, MSG, ...)
+#define ChipLogDetail(MOD, MSG, ...) ((void) 0)
 #endif
 
 #if CHIP_ERROR_LOGGING || CHIP_PROGRESS_LOGGING || CHIP_DETAIL_LOGGING
@@ -295,6 +309,76 @@ bool IsCategoryEnabled(uint8_t category);
 #define ChipLogFunctError(aErr) IgnoreUnusedVariable(aErr)
 
 #endif // CHIP_CONFIG_ENABLE_FUNCT_ERROR_LOGGING
+
+/*
+ *  @brief
+ *      Macro for use in a string formatter for a 64-bit hex print.
+ *      Will split into 2x 32-bit prints to support small printf libraries
+ *
+ *  Example Usage:
+ *
+ *  @code
+ *  void foo() {
+ *      uint64_t value = 0x1122334455667788;
+ *      ChipLogProgress(Foo, "A 64-bit value: 0x" ChipLogFormatX64, ChipLogValueX64(value));
+ *  }
+ *  @endcode
+ *
+ */
+#define ChipLogFormatX64 "%08" PRIX32 "%08" PRIX32
+
+/*
+ *  @brief
+ *      Macro for use in a printf parameter list for a 64-bit value.
+ *      Will split into MSB/LSB 32-bit values to use only 32-bit formatting.
+ *
+ *  Example Usage:
+ *
+ *  @code
+ *  void foo() {
+ *      uint64_t value = 0x1122334455667788;
+ *      ChipLogProgress(Foo, "A 64-bit value: 0x" ChipLogFormatX64, ChipLogValueX64(value));
+ *  }
+ *  @endcode
+ *
+ *  @param[in]  aValue    64-bit value that will be split in 32-bit MSB/LSB part
+ */
+#define ChipLogValueX64(aValue) static_cast<uint32_t>(aValue >> 32), static_cast<uint32_t>(aValue)
+
+/*
+ *  @brief
+ *      Macro for use in a string formatter for a MEI hex print.
+ *      Will split into 2x 16-bit prints to display both the MEI prefix/suffix
+ *
+ *  Example Usage:
+ *
+ *  @code
+ *  void foo() {
+ *      chip::CommandId value = 0x12340001;
+ *      ChipLogProgress(Foo, "A MEI value: " ChipLogFormatMEI, ChipLogValueMEI(value));
+ *  }
+ *  @endcode
+ *
+ */
+#define ChipLogFormatMEI "0x%04" PRIX16 "_%04" PRIX16
+
+/*
+ *  @brief
+ *      Macro for use in a printf parameter list for MEI value.
+ *      Will split into MSB/LSB 16-bit values to separate prefix/suffix.
+ *
+ *  Example Usage:
+ *
+ *  @code
+ *  void foo() {
+ *      chip::CommandId value = 0x12340001;
+ *      ChipLogProgress(Foo, "A MEI value: " ChipLogFormatMEI, ChipLogValueMEI(value));
+ *  }
+ *  @endcode
+ *
+ *  @param[in]  aValue    "32-bit value that will be split in 16-bit MSB/LSB part
+ */
+#define ChipLogValueMEI(aValue) static_cast<uint16_t>(aValue >> 16), static_cast<uint16_t>(aValue)
 
 } // namespace Logging
 } // namespace chip

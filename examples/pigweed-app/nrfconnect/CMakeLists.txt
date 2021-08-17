@@ -31,6 +31,8 @@ find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
 
 project(chip-nrf52840-pigweed-example)
 
+include(${CHIP_ROOT}/config/nrfconnect/app/enable-gnu-std.cmake)
+
 target_compile_options(app PRIVATE -Werror)
 
 include(${PIGWEED_ROOT}/pw_build/pigweed.cmake)
@@ -39,14 +41,13 @@ include(${PIGWEED_ROOT}/pw_protobuf_compiler/proto.cmake)
 pw_set_backend(pw_log pw_log_basic)
 pw_set_backend(pw_assert pw_assert_log)
 pw_set_backend(pw_sys_io pw_sys_io.nrfconnect)
-set(dir_pw_third_party_nanopb PRESENT CACHE STRING ${CHIP_ROOT}/third_party/nanopb/repo FORCE)
+set(dir_pw_third_party_nanopb "${CHIP_ROOT}/third_party/nanopb/repo" CACHE STRING "" FORCE)
 
 add_subdirectory(third_party/connectedhomeip/examples/platform/nrfconnect/pw_sys_io)
 add_subdirectory(third_party/connectedhomeip/third_party/nanopb/repo)
 add_subdirectory(third_party/connectedhomeip/third_party/pigweed/repo)
 
 target_include_directories(app PRIVATE main/include
-                           ${ZEPHYR_BASE}/subsys // required to get access to `log_output_std.h`
                            ${NRFCONNECT_COMMON}/util/include
                            ${CHIP_ROOT}/src/lib/support
                            ${PIGWEED_ROOT}/pw_sys_io/public
@@ -76,3 +77,7 @@ target_link_libraries(app PUBLIC
   pw_rpc.nanopb.echo_service
   pw_rpc.server
 )
+
+target_link_libraries(pw_build INTERFACE zephyr_interface)
+
+include(${CHIP_ROOT}/config/nrfconnect/app/flashing.cmake)

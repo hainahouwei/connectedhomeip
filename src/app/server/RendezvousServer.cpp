@@ -17,12 +17,11 @@
 
 #include <app/server/RendezvousServer.h>
 
-#include <app/server/SessionManager.h>
+#include <app/server/Mdns.h>
 #include <core/CHIPError.h>
 #include <support/CodeUtils.h>
 #include <support/SafeInt.h>
 #include <transport/SecureSessionMgr.h>
-#include <transport/StorablePeerConnection.h>
 
 #if CHIP_ENABLE_OPENTHREAD
 #include <platform/ThreadStackManager.h>
@@ -35,94 +34,143 @@ using namespace ::chip::DeviceLayer;
 
 namespace chip {
 
-RendezvousServer::RendezvousServer() : mRendezvousSession(this) {}
-
-CHIP_ERROR RendezvousServer::WaitForPairing(const RendezvousParameters & params, TransportMgrBase * transportMgr,
-                                            SecureSessionMgr * sessionMgr, Transport::AdminPairingInfo * admin)
+namespace {
+void OnPlatformEventWrapper(const DeviceLayer::ChipDeviceEvent * event, intptr_t arg)
 {
-    return mRendezvousSession.Init(params, transportMgr, sessionMgr, admin);
+    RendezvousServer * server = reinterpret_cast<RendezvousServer *>(arg);
+    server->OnPlatformEvent(event);
 }
+} // namespace
 
-void RendezvousServer::OnRendezvousError(CHIP_ERROR err)
+void RendezvousServer::OnPlatformEvent(const DeviceLayer::ChipDeviceEvent * event)
 {
-    ChipLogProgress(AppServer, "OnRendezvousError: %s", ErrorStr(err));
-}
-
-void RendezvousServer::OnRendezvousConnectionOpened()
-{
-    ChipLogProgress(AppServer, "OnRendezvousConnectionOpened");
-}
-
-void RendezvousServer::OnRendezvousConnectionClosed()
-{
-    ChipLogProgress(AppServer, "OnRendezvousConnectionClosed");
-}
-
-void RendezvousServer::OnRendezvousMessageReceived(const PacketHeader & packetHeader, const PeerAddress & peerAddress,
-                                                   System::PacketBufferHandle buffer)
-{}
-
-void RendezvousServer::OnRendezvousComplete()
-{
-    ChipLogProgress(AppServer, "Device completed Rendezvous process");
-    StorablePeerConnection connection(mRendezvousSession.GetPairingSession(), mRendezvousSession.GetAdminId());
-
-    VerifyOrReturn(mStorage != nullptr,
-                   ChipLogError(AppServer, "Storage delegate is not available. Cannot store the connection state"));
-    VerifyOrReturn(connection.StoreIntoKVS(*mStorage) == CHIP_NO_ERROR,
-                   ChipLogError(AppServer, "Failed to store the connection state"));
-
-    uint16_t nextKeyId = mRendezvousSession.GetNextKeyId();
-    mStorage->SyncSetKeyValue(kStorablePeerConnectionCountKey, &nextKeyId, sizeof(nextKeyId));
-}
-
-void RendezvousServer::OnRendezvousStatusUpdate(Status status, CHIP_ERROR err)
-{
-    VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(AppServer, "OnRendezvousStatusUpdate: %s", chip::ErrorStr(err)));
-
-    switch (status)
+    if (event->Type == DeviceLayer::DeviceEventType::kCommissioningComplete)
     {
-    case RendezvousSessionDelegate::SecurePairingSuccess:
-        ChipLogProgress(AppServer, "Device completed SPAKE2+ handshake");
-        if (mDelegate != nullptr)
+        if (event->CommissioningComplete.status == CHIP_NO_ERROR)
         {
-            mDelegate->OnRendezvousStarted();
+            ChipLogProgress(Discovery, "Commissioning completed successfully");
         }
-        break;
-
-    case RendezvousSessionDelegate::SecurePairingFailed:
-        ChipLogProgress(AppServer, "Failed in SPAKE2+ handshake");
-        if (mDelegate != nullptr)
+        else
         {
-            mDelegate->OnRendezvousStopped();
+            ChipLogError(Discovery, "Commissioning errored out with error %" CHIP_ERROR_FORMAT,
+                         event->CommissioningComplete.status.Format());
         }
-        break;
+    }
+    else if (event->Type == DeviceLayer::DeviceEventType::kOperationalNetworkEnabled)
+    {
+        app::Mdns::AdvertiseOperational();
+        ChipLogError(Discovery, "Operational advertising enabled");
+    }
+}
 
-    case RendezvousSessionDelegate::NetworkProvisioningSuccess:
-        ChipLogProgress(AppServer, "Device was assigned network credentials");
-        if (chip::Mdns::ServiceAdvertiser::Instance().Start(&DeviceLayer::InetLayer, chip::Mdns::kMdnsPort) != CHIP_NO_ERROR)
-        {
-            ChipLogError(AppServer, "Failed to start mDNS advertisement");
-        }
-        if (mDelegate != nullptr)
-        {
-            mDelegate->OnRendezvousStopped();
-        }
-        break;
+CHIP_ERROR RendezvousServer::WaitForPairing(const RendezvousParameters & params, uint32_t pbkdf2IterCount, const ByteSpan & salt,
+                                            uint16_t passcodeID, Messaging::ExchangeManager * exchangeManager,
+                                            TransportMgrBase * transportMgr, SecureSessionMgr * sessionMgr)
+{
+    VerifyOrReturnError(transportMgr != nullptr, CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(exchangeManager != nullptr, CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(sessionMgr != nullptr, CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrReturnError(params.HasSetupPINCode() || params.HasPASEVerifier(), CHIP_ERROR_INVALID_ARGUMENT);
 
-    case RendezvousSessionDelegate::NetworkProvisioningFailed:
-        ChipLogProgress(AppServer, "Failed in network provisioning");
-        if (mDelegate != nullptr)
-        {
-            mDelegate->OnRendezvousStopped();
-        }
-        break;
+#if CONFIG_NETWORK_LAYER_BLE
+    VerifyOrReturnError(params.HasAdvertisementDelegate(), CHIP_ERROR_INVALID_ARGUMENT);
+#endif
 
-    default:
-        break;
-    };
+    mAdvDelegate = params.GetAdvertisementDelegate();
 
-exit:
-    return;
+    if (params.GetPeerAddress().GetTransportType() == Transport::Type::kBle)
+#if !CONFIG_NETWORK_LAYER_BLE
+    {
+        return CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE;
+    }
+#endif
+
+    ChipLogProgress(Discovery, "WaitForPairing(): HasAdvertisementDelegate %d", HasAdvertisementDelegate());
+    if (HasAdvertisementDelegate())
+    {
+        ReturnErrorOnFailure(GetAdvertisementDelegate()->StartAdvertisement());
+    }
+
+    mSessionMgr      = sessionMgr;
+    mExchangeManager = exchangeManager;
+
+    ReturnErrorOnFailure(mExchangeManager->RegisterUnsolicitedMessageHandlerForType(
+        Protocols::SecureChannel::MsgType::PBKDFParamRequest, &mPairingSession));
+
+    uint16_t keyID = 0;
+    ReturnErrorOnFailure(mIDAllocator->Allocate(keyID));
+
+    if (params.HasPASEVerifier())
+    {
+        ReturnErrorOnFailure(
+            mPairingSession.WaitForPairing(params.GetPASEVerifier(), pbkdf2IterCount, salt, passcodeID, keyID, this));
+    }
+    else
+    {
+        ReturnErrorOnFailure(mPairingSession.WaitForPairing(params.GetSetupPINCode(), pbkdf2IterCount, salt, keyID, this));
+    }
+
+    ReturnErrorOnFailure(mPairingSession.MessageDispatch().Init(transportMgr));
+    mPairingSession.MessageDispatch().SetPeerAddress(params.GetPeerAddress());
+
+    return CHIP_NO_ERROR;
+}
+
+void RendezvousServer::Cleanup()
+{
+    mExchangeManager->UnregisterUnsolicitedMessageHandlerForType(Protocols::SecureChannel::MsgType::PBKDFParamRequest);
+
+    if (HasAdvertisementDelegate())
+    {
+        GetAdvertisementDelegate()->StopAdvertisement();
+    }
+}
+
+void RendezvousServer::OnSessionEstablishmentError(CHIP_ERROR err)
+{
+    Cleanup();
+
+    ChipLogProgress(AppServer, "OnSessionEstablishmentError: %s", ErrorStr(err));
+    ChipLogProgress(AppServer, "Failed in SPAKE2+ handshake");
+
+    if (mDelegate != nullptr)
+    {
+        mDelegate->OnRendezvousStopped();
+    }
+}
+
+void RendezvousServer::OnSessionEstablished()
+{
+    CHIP_ERROR err =
+        mSessionMgr->NewPairing(Optional<Transport::PeerAddress>::Value(mPairingSession.GetPeerAddress()),
+                                mPairingSession.GetPeerNodeId(), &mPairingSession, SecureSession::SessionRole::kResponder, 0);
+    if (err != CHIP_NO_ERROR)
+    {
+        ChipLogError(Ble, "Failed in setting up secure channel: err %s", ErrorStr(err));
+        OnSessionEstablishmentError(err);
+        return;
+    }
+
+    ChipLogProgress(AppServer, "Device completed SPAKE2+ handshake");
+    if (mDelegate != nullptr)
+    {
+        mDelegate->OnRendezvousStarted();
+    }
+
+    DeviceLayer::PlatformMgr().AddEventHandler(OnPlatformEventWrapper, reinterpret_cast<intptr_t>(this));
+
+    if (mPairingSession.GetPeerAddress().GetTransportType() == Transport::Type::kBle)
+    {
+        Cleanup();
+    }
+    else
+    {
+        // TODO: remove this once we move all tools / examples onto cluster-based IP commissioning.
+#if CONFIG_RENDEZVOUS_WAIT_FOR_COMMISSIONING_COMPLETE
+        Cleanup();
+#endif
+    }
+
+    ChipLogProgress(AppServer, "Device completed Rendezvous process");
 }
 } // namespace chip

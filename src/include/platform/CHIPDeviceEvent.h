@@ -23,6 +23,7 @@
  */
 
 #pragma once
+#include <stdint.h>
 
 namespace chip {
 namespace DeviceLayer {
@@ -197,6 +198,16 @@ enum PublicEventTypes
      * wifi/ethernet interface.
      */
     kInterfaceIpAddressChanged,
+
+    /**
+     * Commissioning has completed either through timer expiry or by a call to the general commissioning cluster command.
+     */
+    kCommissioningComplete,
+
+    /**
+     *
+     */
+    kOperationalNetworkEnabled,
 };
 
 /**
@@ -216,6 +227,7 @@ enum InternalEventTypes
     kCHIPoBLEWriteReceived,
     kCHIPoBLEIndicateConfirm,
     kCHIPoBLEConnectionError,
+    kCHIPoBLENotifyConfirm
 };
 
 static_assert(kEventTypeNotSet == 0, "kEventTypeNotSet must be defined as 0");
@@ -281,6 +293,9 @@ typedef void (*AsyncWorkFunct)(intptr_t arg);
 #endif // defined(CHIP_DEVICE_LAYER_TARGET)
 
 #include <ble/BleConfig.h>
+#include <inet/InetLayer.h>
+#include <system/SystemEvent.h>
+#include <system/SystemObject.h>
 #include <system/SystemPacketBuffer.h>
 
 namespace chip {
@@ -384,6 +399,10 @@ struct ChipDeviceEvent final
         } CHIPoBLEConnectionError;
         struct
         {
+            BLE_CONNECTION_OBJECT ConId;
+        } CHIPoBLENotifyConfirm;
+        struct
+        {
             bool RoleChanged : 1;
             bool AddressChanged : 1;
             bool NetDataChanged : 1;
@@ -401,6 +420,17 @@ struct ChipDeviceEvent final
         {
             InterfaceIpChangeType Type;
         } InterfaceIpAddressChanged;
+
+        struct
+        {
+            CHIP_ERROR status;
+        } CommissioningComplete;
+
+        struct
+        {
+            // TODO(cecille): This should just specify wifi or thread since we assume at most 1.
+            int network;
+        } OperationalNetwork;
     };
 
     void Clear() { memset(this, 0, sizeof(*this)); }

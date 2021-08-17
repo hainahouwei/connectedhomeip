@@ -51,9 +51,12 @@
 #include <stddef.h>  // For NULL.
 #include <stdint.h>  // For various uint*_t types
 
-#include "af-enums.h"
-#include "basic-types.h"
-#include "types_stub.h" // For various types.
+#include <app/util/af-enums.h>
+#include <app/util/basic-types.h>
+#include <app/util/types_stub.h> // For various types.
+
+#include <messaging/ExchangeContext.h>
+#include <support/Variant.h>
 
 #ifdef EZSP_HOST
 #include "app/util/ezsp/ezsp-enum.h"
@@ -95,19 +98,23 @@ typedef void (*EmberAfGenericClusterFunction)(void);
  * or a pointer to the value itself, if attribute type is longer than
  * 2 bytes.
  */
-typedef union
+union EmberAfDefaultAttributeValue
 {
+    constexpr EmberAfDefaultAttributeValue(uint8_t * ptr) : ptrToDefaultValue(ptr) {}
+    constexpr EmberAfDefaultAttributeValue(uint16_t val) : defaultValue(val) {}
+
     /**
      * Points to data if size is more than 2 bytes.
      * If size is more than 2 bytes, and this value is NULL,
      * then the default value is all zeroes.
      */
     uint8_t * ptrToDefaultValue;
+
     /**
      * Actual default value if the attribute size is 2 bytes or less.
      */
     uint16_t defaultValue;
-} EmberAfDefaultAttributeValue;
+};
 
 /**
  * @brief Type describing the attribute default, min and max values.
@@ -134,8 +141,11 @@ typedef struct
 /**
  * @brief Union describing the attribute default/min/max values.
  */
-typedef union
+union EmberAfDefaultOrMinMaxAttributeValue
 {
+    constexpr EmberAfDefaultOrMinMaxAttributeValue(uint8_t * ptr) : ptrToDefaultValue(ptr) {}
+    constexpr EmberAfDefaultOrMinMaxAttributeValue(uint16_t val) : defaultValue(val) {}
+
     /**
      * Points to data if size is more than 2 bytes.
      * If size is more than 2 bytes, and this value is NULL,
@@ -151,7 +161,7 @@ typedef union
      * supported for this attribute.
      */
     EmberAfAttributeMinMaxValue * ptrToMinMaxValue;
-} EmberAfDefaultOrMinMaxAttributeValue;
+};
 
 /**
  * @brief Each attribute has it's metadata stored in such struct.
@@ -171,7 +181,7 @@ typedef struct
     /**
      * Size of this attribute in bytes.
      */
-    uint8_t size;
+    uint16_t size;
     /**
      * Attribute mask, tagging attribute with specific
      * functionality. See ATTRIBUTE_MASK_ macros defined
@@ -423,14 +433,16 @@ typedef struct
  *   and pass a pointer to that location around during
  *   command processing
  */
-typedef struct
+struct EmberAfClusterCommand
 {
+    chip::NodeId SourceNodeId() const { return source->GetSecureSession().GetPeerNodeId(); }
+
     /**
      * APS frame for the incoming message
      */
     EmberApsFrame * apsFrame;
     EmberIncomingMessageType type;
-    chip::NodeId source;
+    chip::Messaging::ExchangeContext * source;
     uint8_t * buffer;
     uint16_t bufLen;
     bool clusterSpecific;
@@ -442,7 +454,7 @@ typedef struct
     uint8_t direction;
     EmberAfInterpanHeader * interPanHeader;
     uint8_t networkIndex;
-} EmberAfClusterCommand;
+};
 
 /**
  * @brief Endpoint type struct describes clusters that are on the endpoint.
@@ -719,9 +731,9 @@ typedef enum
 typedef enum
 {
     EMBER_AF_OK_TO_SLEEP,
-    /** @deprecated. */
+    /** deprecated. */
     EMBER_AF_OK_TO_HIBERNATE = EMBER_AF_OK_TO_SLEEP,
-    /** @deprecated. */
+    /** deprecated. */
     EMBER_AF_OK_TO_NAP,
     EMBER_AF_STAY_AWAKE,
 } EmberAfEventSleepControl;
@@ -931,6 +943,10 @@ typedef struct
     uint8_t currentPositionLiftPercentageValue;
     bool hasCurrentPositionTiltPercentageValue;
     uint8_t currentPositionTiltPercentageValue;
+    bool hasTargetPositionLiftPercent100thsValue;
+    uint16_t targetPositionLiftPercent100thsValue;
+    bool hasTargetPositionTiltPercent100thsValue;
+    uint16_t targetPositionTiltPercent100thsValue;
 #endif
 } EmberAfSceneTableEntry;
 
@@ -1228,7 +1244,7 @@ typedef void (*EmberAfManufacturerSpecificClusterAttributeChangedCallback)(chip:
  * This function is called before an attribute changes.
  */
 typedef EmberAfStatus (*EmberAfClusterPreAttributeChangedCallback)(chip::EndpointId endpoint, chip::AttributeId attributeId,
-                                                                   EmberAfAttributeType attributeType, uint8_t size,
+                                                                   EmberAfAttributeType attributeType, uint16_t size,
                                                                    uint8_t * value);
 
 /**
@@ -1239,12 +1255,114 @@ typedef EmberAfStatus (*EmberAfClusterPreAttributeChangedCallback)(chip::Endpoin
  */
 typedef void (*EmberAfDefaultResponseFunction)(chip::EndpointId endpoint, chip::CommandId commandId, EmberAfStatus status);
 
+namespace chip {
+/**
+ * @brief a type that represents where we are trying to send a message.
+ *        The variant type identifies which arm of the union is in use.
+ */
+class MessageSendDestination
+{
+public:
+    MessageSendDestination(MessageSendDestination & that)       = default;
+    MessageSendDestination(const MessageSendDestination & that) = default;
+    MessageSendDestination(MessageSendDestination && that)      = default;
+
+    static MessageSendDestination ViaBinding(uint8_t bindingIndex)
+    {
+        return MessageSendDestination(VariantViaBinding(bindingIndex));
+    }
+
+    static MessageSendDestination Direct(NodeId nodeId) { return MessageSendDestination(VariantDirect(nodeId)); }
+
+    static MessageSendDestination Multicast(GroupId groupId) { return MessageSendDestination(VariantMulticast(groupId)); }
+
+    static MessageSendDestination MulticastWithAlias(GroupId groupId)
+    {
+        return MessageSendDestination(VariantMulticastWithAlias(groupId));
+    }
+
+    static MessageSendDestination ViaExchange(Messaging::ExchangeContext * exchangeContext)
+    {
+        return MessageSendDestination(VariantViaExchange(exchangeContext));
+    }
+
+    bool IsViaBinding() const { return mDestination.Is<VariantViaBinding>(); }
+    bool IsDirect() const { return mDestination.Is<VariantDirect>(); }
+    bool IsViaExchange() const { return mDestination.Is<VariantViaExchange>(); }
+
+    uint8_t GetBindingIndex() const { return mDestination.Get<VariantViaBinding>().mBindingIndex; }
+    NodeId GetDirectNodeId() const { return mDestination.Get<VariantDirect>().mNodeId; }
+    Messaging::ExchangeContext * GetExchangeContext() const { return mDestination.Get<VariantViaExchange>().mExchangeContext; }
+
+private:
+    struct VariantViaBinding
+    {
+        static constexpr const std::size_t VariantId = 1;
+        explicit VariantViaBinding(uint8_t bindingIndex) : mBindingIndex(bindingIndex) {}
+        uint8_t mBindingIndex;
+    };
+
+    struct VariantViaAddressTable
+    {
+        static constexpr const std::size_t VariantId = 2;
+    };
+
+    struct VariantDirect
+    {
+        static constexpr const std::size_t VariantId = 3;
+        explicit VariantDirect(NodeId nodeId) : mNodeId(nodeId) {}
+        NodeId mNodeId;
+    };
+
+    struct VariantMulticast
+    {
+        static constexpr const std::size_t VariantId = 4;
+        explicit VariantMulticast(GroupId groupId) : mGroupId(groupId) {}
+        GroupId mGroupId;
+    };
+
+    struct VariantMulticastWithAlias
+    {
+        static constexpr const std::size_t VariantId = 5;
+        explicit VariantMulticastWithAlias(GroupId groupId) : mGroupId(groupId) {}
+        GroupId mGroupId;
+    };
+
+    struct VariantBroadcast
+    {
+        static constexpr const std::size_t VariantId = 6;
+    };
+
+    struct VariantBroadcastWithAlias
+    {
+        static constexpr const std::size_t VariantId = 7;
+    };
+
+    struct VariantViaExchange
+    {
+        static constexpr const std::size_t VariantId = 8;
+        explicit VariantViaExchange(Messaging::ExchangeContext * exchangeContext) : mExchangeContext(exchangeContext) {}
+        Messaging::ExchangeContext * mExchangeContext;
+    };
+
+    template <typename Destination>
+    MessageSendDestination(Destination && destination)
+    {
+        mDestination.Set<Destination>(std::forward<Destination>(destination));
+    }
+
+    Variant<VariantViaBinding, VariantViaAddressTable, VariantDirect, VariantMulticast, VariantMulticastWithAlias, VariantBroadcast,
+            VariantBroadcastWithAlias, VariantViaExchange>
+        mDestination;
+};
+} // namespace chip
+
 /**
  * @brief Type for referring to the message sent callback function.
  *
  * This function is called when a message is sent.
  */
-typedef void (*EmberAfMessageSentFunction)(EmberOutgoingMessageType type, uint64_t indexOrDestination, EmberApsFrame * apsFrame,
+typedef void (*EmberAfMessageSentFunction)(const chip::MessageSendDestination & destination, EmberApsFrame * apsFrame,
                                            uint16_t msgLen, uint8_t * message, EmberStatus status);
 
 /**
@@ -1257,9 +1375,8 @@ typedef struct
     EmberAfMessageSentFunction callback;
     EmberApsFrame * apsFrame;
     uint8_t * message;
-    uint64_t indexOrDestination;
+    const chip::MessageSendDestination destination;
     uint16_t messageLength;
-    EmberOutgoingMessageType type;
     bool broadcast;
 } EmberAfMessageStruct;
 

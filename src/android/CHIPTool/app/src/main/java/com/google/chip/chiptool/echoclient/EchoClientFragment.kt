@@ -36,7 +36,7 @@ import kotlinx.android.synthetic.main.on_off_client_fragment.deviceIdEd
 class EchoClientFragment : Fragment() {
 
   private val deviceController: ChipDeviceController
-    get() = ChipClient.getDeviceController()
+    get() = ChipClient.getDeviceController(requireContext())
 
   override fun onCreateView(
       inflater: LayoutInflater,
@@ -84,7 +84,7 @@ class EchoClientFragment : Fragment() {
 
     val echoEditTextContents = inputTextEd.text.toString()
     val echoText = if (echoEditTextContents.isEmpty()) DEFAULT_ECHO_MSG else echoEditTextContents
-    deviceController.sendMessage(deviceIdEd.text.toString().toInt(), echoText)
+    deviceController.sendMessage(deviceIdEd.text.toString().toLong(), echoText)
   }
 
   companion object {

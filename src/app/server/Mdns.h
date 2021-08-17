@@ -18,19 +18,32 @@
 #pragma once
 
 #include <core/CHIPError.h>
+#include <stddef.h>
 
 namespace chip {
 namespace app {
 namespace Mdns {
 
-/// Set MDNS operational advertisement
+/// Start operational advertising
 CHIP_ERROR AdvertiseOperational();
 
-/// Set MDNS commisioning advertisement
-CHIP_ERROR AdvertiseCommisioning();
+/// Set MDNS commissioner advertisement
+CHIP_ERROR AdvertiseCommissioner();
+
+/// Set MDNS commissionable node advertisement
+CHIP_ERROR AdvertiseCommissionableNode();
+
+/// Set MDNS advertisement
+// CHIP_ERROR Advertise(chip::Mdns::CommssionAdvertiseMode mode);
+CHIP_ERROR Advertise(bool commissionableNode);
 
 /// (Re-)starts the minmdns server
 void StartServer();
+
+CHIP_ERROR GenerateRotatingDeviceId(char rotatingDeviceIdHexBuffer[], size_t rotatingDeviceIdHexBufferSize);
+
+/// Generates the (random) instance name that a CHIP device is to use for pre-commissioning DNS-SD
+CHIP_ERROR GetCommissionableInstanceName(char * buffer, size_t bufferLen);
 
 } // namespace Mdns
 } // namespace app

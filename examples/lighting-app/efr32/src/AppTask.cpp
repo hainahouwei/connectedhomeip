@@ -21,22 +21,24 @@
 #include "AppConfig.h"
 #include "AppEvent.h"
 #include "ButtonHandler.h"
-#include "DataModelHandler.h"
 #include "LEDWidget.h"
-#include "OnboardingCodesUtil.h"
-#include "Server.h"
-#include "Service.h"
-#include "attribute-storage.h"
-#include "gen/attribute-id.h"
-#include "gen/attribute-type.h"
-#include "gen/cluster-id.h"
 #include "lcd.h"
 #include "qrcodegen.h"
+#include <app/common/gen/attribute-id.h>
+#include <app/common/gen/attribute-type.h>
+#include <app/common/gen/cluster-id.h>
+#include <app/server/OnboardingCodesUtil.h>
+#include <app/server/Server.h>
+#include <app/util/attribute-storage.h>
 
 #include <assert.h>
 
 #include <setup_payload/QRCodeSetupPayloadGenerator.h>
 #include <setup_payload/SetupPayload.h>
+
+#include <platform/EFR32/freertos_bluetooth.h>
+
+#include <lib/support/CodeUtils.h>
 
 #include <platform/CHIPDeviceLayer.h>
 #if CHIP_ENABLE_OPENTHREAD
@@ -47,50 +49,51 @@
 
 #define FACTORY_RESET_TRIGGER_TIMEOUT 3000
 #define FACTORY_RESET_CANCEL_WINDOW_TIMEOUT 3000
-#define APP_TASK_STACK_SIZE (2048)
+#define APP_TASK_STACK_SIZE (1536)
 #define APP_TASK_PRIORITY 2
 #define APP_EVENT_QUEUE_SIZE 10
 #define EXAMPLE_VENDOR_ID 0xcafe
+namespace {
 
 TimerHandle_t sFunctionTimer; // FreeRTOS app sw timer.
 
-static TaskHandle_t sAppTaskHandle;
-static QueueHandle_t sAppEventQueue;
+TaskHandle_t sAppTaskHandle;
+QueueHandle_t sAppEventQueue;
 
-static LEDWidget sStatusLED;
-static LEDWidget sLightLED;
+LEDWidget sStatusLED;
+LEDWidget sLightLED;
 
-static bool sIsThreadProvisioned     = false;
-static bool sIsThreadEnabled         = false;
-static bool sHaveBLEConnections      = false;
-static bool sHaveServiceConnectivity = false;
+bool sIsThreadProvisioned     = false;
+bool sIsThreadEnabled         = false;
+bool sHaveBLEConnections      = false;
+bool sHaveServiceConnectivity = false;
 
+uint8_t sAppEventQueueBuffer[APP_EVENT_QUEUE_SIZE * sizeof(AppEvent)];
+StaticQueue_t sAppEventQueueStruct;
+
+StackType_t appStack[APP_TASK_STACK_SIZE / sizeof(StackType_t)];
+StaticTask_t appTaskStruct;
+} // namespace
 using namespace chip::TLV;
 using namespace ::chip::DeviceLayer;
 
 AppTask AppTask::sAppTask;
 
-int AppTask::StartAppTask()
+CHIP_ERROR AppTask::StartAppTask()
 {
-    int err = CHIP_ERROR_MAX;
-
-    sAppEventQueue = xQueueCreate(APP_EVENT_QUEUE_SIZE, sizeof(AppEvent));
+    sAppEventQueue = xQueueCreateStatic(APP_EVENT_QUEUE_SIZE, sizeof(AppEvent), sAppEventQueueBuffer, &sAppEventQueueStruct);
     if (sAppEventQueue == NULL)
     {
         EFR32_LOG("Failed to allocate app event queue");
-        appError(err);
+        appError(APP_ERROR_EVENT_QUEUE_FAILED);
     }
 
     // Start App task.
-    if (xTaskCreate(AppTaskMain, "APP", APP_TASK_STACK_SIZE / sizeof(StackType_t), NULL, 1, &sAppTaskHandle) == pdPASS)
-    {
-        err = CHIP_NO_ERROR;
-    }
-
-    return err;
+    sAppTaskHandle = xTaskCreateStatic(AppTaskMain, APP_TASK_NAME, ArraySize(appStack), NULL, 1, appStack, &appTaskStruct);
+    return (sAppTaskHandle == nullptr) ? APP_ERROR_CREATE_TASK_FAILED : CHIP_NO_ERROR;
 }
 
-int AppTask::Init()
+CHIP_ERROR AppTask::Init()
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
@@ -113,7 +116,7 @@ int AppTask::Init()
         appError(err);
     }
 
-    EFR32_LOG("Current Firmware Version: %s", CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION);
+    EFR32_LOG("Current Firmware Version: %s", CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION_STRING);
     err = LightMgr().Init();
     if (err != CHIP_NO_ERROR)
     {
@@ -137,7 +140,7 @@ int AppTask::Init()
 #ifdef DISPLAY_ENABLED
     std::string QRCode;
 
-    if (GetQRCode(QRCode, chip::RendezvousInformationFlags::kBLE) == CHIP_NO_ERROR)
+    if (GetQRCode(QRCode, chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE)) == CHIP_NO_ERROR)
     {
         LCDWriteQRCode((uint8_t *) QRCode.c_str());
     }
@@ -146,7 +149,7 @@ int AppTask::Init()
         EFR32_LOG("Getting QR code failed!");
     }
 #else
-    PrintOnboardingCodes(chip::RendezvousInformationFlags::kBLE);
+    PrintOnboardingCodes(chip::RendezvousInformationFlag(chip::RendezvousInformationFlag::kBLE));
 #endif
 
     return err;
@@ -154,11 +157,9 @@ int AppTask::Init()
 
 void AppTask::AppTaskMain(void * pvParameter)
 {
-    int err;
     AppEvent event;
-    uint64_t mLastChangeTimeUS = 0;
 
-    err = sAppTask.Init();
+    CHIP_ERROR err = sAppTask.Init();
     if (err != CHIP_NO_ERROR)
     {
         EFR32_LOG("AppTask.Init() failed");
@@ -166,7 +167,6 @@ void AppTask::AppTaskMain(void * pvParameter)
     }
 
     EFR32_LOG("App Task started");
-    SetDeviceName("EFR32LightingDemo._chip._udp.local.");
 
     while (true)
     {
@@ -227,15 +227,6 @@ void AppTask::AppTaskMain(void * pvParameter)
 
         sStatusLED.Animate();
         sLightLED.Animate();
-
-        uint64_t nowUS            = chip::System::Platform::Layer::GetClock_Monotonic();
-        uint64_t nextChangeTimeUS = mLastChangeTimeUS + 5 * 1000 * 1000UL;
-
-        if (nowUS > nextChangeTimeUS)
-        {
-            PublishService();
-            mLastChangeTimeUS = nowUS;
-        }
     }
 }
 
@@ -244,7 +235,7 @@ void AppTask::LightActionEventHandler(AppEvent * aEvent)
     bool initiated = false;
     LightingManager::Action_t action;
     int32_t actor;
-    int err = CHIP_NO_ERROR;
+    CHIP_ERROR err = CHIP_NO_ERROR;
 
     if (aEvent->Type == AppEvent::kEventType_Light)
     {
@@ -265,7 +256,7 @@ void AppTask::LightActionEventHandler(AppEvent * aEvent)
     }
     else
     {
-        err = CHIP_ERROR_MAX;
+        err = APP_ERROR_UNHANDLED_EVENT;
     }
 
     if (err == CHIP_NO_ERROR)
@@ -321,7 +312,7 @@ void AppTask::FunctionTimerEventHandler(AppEvent * aEvent)
 
     // If we reached here, the button was held past FACTORY_RESET_TRIGGER_TIMEOUT,
     // initiate factory reset
-    if (sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_StartThread)
+    if (sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_StartBleAdv)
     {
         EFR32_LOG("Factory Reset Triggered. Release button within %ums to cancel.", FACTORY_RESET_CANCEL_WINDOW_TIMEOUT);
 
@@ -366,29 +357,27 @@ void AppTask::FunctionHandler(AppEvent * aEvent)
         if (!sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_NoneSelected)
         {
             sAppTask.StartTimer(FACTORY_RESET_TRIGGER_TIMEOUT);
-            sAppTask.mFunction = kFunction_StartThread;
+            sAppTask.mFunction = kFunction_StartBleAdv;
         }
     }
     else
     {
-        // If the button was released before factory reset got initiated, start Thread Network
-        if (sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_StartThread)
+        // If the button was released before factory reset got initiated, start BLE advertissement in fast mode
+        if (sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_StartBleAdv)
         {
             sAppTask.CancelTimer();
             sAppTask.mFunction = kFunction_NoneSelected;
-#if CHIP_ENABLE_OPENTHREAD
-            if (!chip::DeviceLayer::ConnectivityMgr().IsThreadProvisioned())
+
+            if (!ConnectivityMgr().IsThreadProvisioned())
             {
-                StartDefaultThreadNetwork();
-                EFR32_LOG("Device is not commissioned to a Thread network. Starting with the default configuration.");
+                // Enable BLE advertisements
+                ConnectivityMgr().SetBLEAdvertisingEnabled(true);
+                ConnectivityMgr().SetBLEAdvertisingMode(ConnectivityMgr().kFastAdvertising);
             }
             else
             {
-                EFR32_LOG("Device is commissioned to a Thread network.");
+                EFR32_LOG("Network is already provisioned, Ble advertissement not enabled");
             }
-#else
-            EFR32_LOG("Thread is not defined.");
-#endif
         }
         else if (sAppTask.mFunctionTimerActive && sAppTask.mFunction == kFunction_FactoryReset)
         {
@@ -411,7 +400,7 @@ void AppTask::CancelTimer()
     if (xTimerStop(sFunctionTimer, 0) == pdFAIL)
     {
         EFR32_LOG("app timer stop() failed");
-        appError(CHIP_ERROR_MAX);
+        appError(APP_ERROR_STOP_TIMER_FAILED);
     }
 
     mFunctionTimerActive = false;
@@ -431,7 +420,7 @@ void AppTask::StartTimer(uint32_t aTimeoutInMs)
     if (xTimerChangePeriod(sFunctionTimer, aTimeoutInMs / portTICK_PERIOD_MS, 100) != pdPASS)
     {
         EFR32_LOG("app timer start() failed");
-        appError(CHIP_ERROR_MAX);
+        appError(APP_ERROR_START_TIMER_FAILED);
     }
 
     mFunctionTimerActive = true;
@@ -494,6 +483,10 @@ void AppTask::PostEvent(const AppEvent * aEvent)
         {
             EFR32_LOG("Failed to post event to app task event queue");
         }
+    }
+    else
+    {
+        EFR32_LOG("Event Queue is NULL should never happen");
     }
 }
 

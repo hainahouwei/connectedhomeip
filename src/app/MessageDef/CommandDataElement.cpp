@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include <app/AppBuildConfig.h>
+
 using namespace chip;
 using namespace chip::TLV;
 
@@ -43,9 +45,7 @@ CHIP_ERROR CommandDataElement::Parser::Init(const chip::TLV::TLVReader & aReader
 
     VerifyOrExit(chip::TLV::kTLVType_Structure == mReader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
 
-    // This is just a dummy, as we're not going to exit this container ever
-    chip::TLV::TLVType OuterContainerType;
-    err = mReader.EnterContainer(OuterContainerType);
+    err = mReader.EnterContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
@@ -59,7 +59,7 @@ CommandDataElement::Parser::ParseData(chip::TLV::TLVReader & aReader, int aDepth
 
     if (aDepth == 0)
     {
-        PRETTY_PRINT("\tCommandDataElement = ");
+        PRETTY_PRINT("\tCommandData = ");
     }
     else
     {
@@ -276,7 +276,7 @@ CHIP_ERROR CommandDataElement::Parser::CheckSchemaValidity() const
             // check if this tag has appeared before
             VerifyOrExit(!(TagPresenceMask & (1 << kCsTag_StatusElement)), err = CHIP_ERROR_INVALID_TLV_TAG);
             TagPresenceMask |= (1 << kCsTag_StatusElement);
-            VerifyOrExit(chip::TLV::kTLVType_Structure == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
+            VerifyOrExit(chip::TLV::kTLVType_Array == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
 
             {
                 StatusElement::Parser status;
@@ -317,6 +317,8 @@ CHIP_ERROR CommandDataElement::Parser::CheckSchemaValidity() const
             err = CHIP_NO_ERROR;
         }
     }
+    SuccessOrExit(err);
+    err = reader.ExitContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
@@ -364,7 +366,7 @@ CHIP_ERROR CommandDataElement::Parser::GetStatusElement(StatusElement::Parser * 
     err = mReader.FindElementWithTag(chip::TLV::ContextTag(kCsTag_StatusElement), reader);
     SuccessOrExit(err);
 
-    VerifyOrExit(chip::TLV::kTLVType_Structure == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
+    VerifyOrExit(chip::TLV::kTLVType_Array == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
 
     err = apStatusElement->Init(reader);
     SuccessOrExit(err);

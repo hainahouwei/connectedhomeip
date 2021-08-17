@@ -23,16 +23,15 @@
 
 #pragma once
 
-#ifndef _CHIP_INTERACTION_MODEL_MESSAGE_DEF_COMMAND_PATH_H
-#define _CHIP_INTERACTION_MODEL_MESSAGE_DEF_COMMAND_PATH_H
-
 #include "Builder.h"
 #include "Parser.h"
+
+#include <app/AppBuildConfig.h>
+#include <app/util/basic-types.h>
 #include <core/CHIPCore.h>
 #include <core/CHIPTLV.h>
 #include <support/CodeUtils.h>
 #include <support/logging/CHIPLogging.h>
-#include <util/basic-types.h>
 
 namespace chip {
 namespace app {
@@ -57,6 +56,7 @@ public:
      */
     CHIP_ERROR Init(const chip::TLV::TLVReader & aReader);
 
+#if CHIP_CONFIG_IM_ENABLE_SCHEMA_CHECK
     /**
      *  @brief Roughly verify the message is correctly formed
      *   1) all mandatory tags are present
@@ -71,6 +71,7 @@ public:
      *  @return #CHIP_NO_ERROR on success
      */
     CHIP_ERROR CheckSchemaValidity() const;
+#endif
 
     /**
      *  @brief Get a TLVReader for the EndpointId. Next() must be called before accessing them.
@@ -97,7 +98,7 @@ public:
     /**
      *  @brief Get a TLVReader for the ClusterId. Next() must be called before accessing them.
      *
-     *  @param [in] apEndpointId    A pointer to ClusterId
+     *  @param [in] apClusterId    A pointer to ClusterId
      *
      *  @return #CHIP_NO_ERROR on success
      *          #CHIP_ERROR_WRONG_TLV_TYPE if there is such element but it's not any of the defined unsigned integer types
@@ -108,7 +109,7 @@ public:
     /**
      *  @brief Get a TLVReader for the CommandId. Next() must be called before accessing them.
      *
-     *  @param [in] apEndpointId    A pointer to CommandId
+     *  @param [in] apCommandId    A pointer to CommandId
      *
      *  @return #CHIP_NO_ERROR on success
      *          #CHIP_ERROR_WRONG_TLV_TYPE if there is such element but it's not any of the defined unsigned integer types
@@ -190,5 +191,3 @@ private:
 
 }; // namespace app
 }; // namespace chip
-
-#endif // _CHIP_INTERACTION_MODEL_MESSAGE_DEF_COMMAND_PATH_H

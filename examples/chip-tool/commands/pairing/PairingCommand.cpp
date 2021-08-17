@@ -17,27 +17,51 @@
  */
 
 #include "PairingCommand.h"
+#include "platform/PlatformManager.h"
+#include <controller/ExampleOperationalCredentialsIssuer.h>
+#include <crypto/CHIPCryptoPAL.h>
+#include <lib/core/CHIPSafeCasts.h>
+#include <protocols/secure_channel/PASESession.h>
+#include <support/logging/CHIPLogging.h>
+
+#include <setup_payload/ManualSetupPayloadParser.h>
+#include <setup_payload/QRCodeSetupPayloadParser.h>
 
 using namespace ::chip;
 
-constexpr uint16_t kWaitDurationInSeconds = 120;
+constexpr uint64_t kBreadcrumb = 0;
+constexpr uint32_t kTimeoutMs  = 6000;
 
-CHIP_ERROR PairingCommand::Run(PersistentStorage & storage, NodeId localId, NodeId remoteId)
+CHIP_ERROR PairingCommand::Run()
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
-    err = mCommissioner.Init(localId, &storage, this);
-    VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(Controller, "Init failure! Commissioner: %s", chip::ErrorStr(err)));
+    GetExecContext()->commissioner->RegisterDeviceAddressUpdateDelegate(this);
+    GetExecContext()->commissioner->RegisterPairingDelegate(this);
 
-    err = mCommissioner.ServiceEvents();
-    VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(Controller, "Init failure! Run Loop: %s", chip::ErrorStr(err)));
+#if CONFIG_PAIR_WITH_RANDOM_ID
+    // Generate a random remote id so we don't end up reusing the same node id
+    // for different nodes.
+    //
+    // TODO: Ideally we'd just ask for an operational cert for the commissionnee
+    // and get the node from that, but the APIs are not set up that way yet.
+    NodeId randomId;
+    ReturnErrorOnFailure(Controller::ExampleOperationalCredentialsIssuer::GetRandomOperationalNodeId(&randomId));
 
-    err = RunInternal(remoteId);
-    VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(chipTool, "Init Failure! PairDevice: %s", chip::ErrorStr(err)));
+    ChipLogProgress(Controller, "Generated random node id: 0x" ChipLogFormatX64, ChipLogValueX64(randomId));
+
+    ReturnErrorOnFailure(GetExecContext()->storage->SetRemoteNodeId(randomId));
+    GetExecContext()->remoteId = randomId;
+#else  // CONFIG_PAIR_WITH_RANDOM_ID
+    // Use the default id, not whatever happens to be in our storage, since this
+    // is a new pairing.
+    GetExecContext()->remoteId = kTestDeviceNodeId;
+#endif // CONFIG_PAIR_WITH_RANDOM_ID
+
+    err = RunInternal(GetExecContext()->remoteId);
+    VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(chipTool, "Init Failure! PairDevice: %s", ErrorStr(err)));
 
 exit:
-    mCommissioner.ServiceEventSignal();
-    mCommissioner.Shutdown();
     return err;
 }
 
@@ -45,7 +69,10 @@ CHIP_ERROR PairingCommand::RunInternal(NodeId remoteId)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
-    UpdateWaitForResponse(true);
+    mRemoteId = remoteId;
+
+    InitCallbacks();
+
     switch (mPairingMode)
     {
     case PairingMode::None:
@@ -54,16 +81,53 @@ CHIP_ERROR PairingCommand::RunInternal(NodeId remoteId)
     case PairingMode::Bypass:
         err = PairWithoutSecurity(remoteId, PeerAddress::UDP(mRemoteAddr.address, mRemotePort));
         break;
+    case PairingMode::QRCode:
+        err = PairWithQRCode(remoteId);
+        break;
+    case PairingMode::ManualCode:
+        err = PairWithManualCode(remoteId);
+        break;
     case PairingMode::Ble:
         err = Pair(remoteId, PeerAddress::BLE());
         break;
+    case PairingMode::OnNetwork:
     case PairingMode::SoftAP:
         err = Pair(remoteId, PeerAddress::UDP(mRemoteAddr.address, mRemotePort));
         break;
+    case PairingMode::Ethernet:
+        err = Pair(remoteId, PeerAddress::UDP(mRemoteAddr.address, mRemotePort));
+        break;
     }
-    WaitForResponse(kWaitDurationInSeconds);
 
     return err;
+}
+
+CHIP_ERROR PairingCommand::PairWithQRCode(NodeId remoteId)
+{
+    SetupPayload payload;
+    ReturnErrorOnFailure(QRCodeSetupPayloadParser(mOnboardingPayload).populatePayload(payload));
+
+    chip::RendezvousInformationFlags rendezvousInformation = payload.rendezvousInformation;
+    ReturnErrorCodeIf(rendezvousInformation != RendezvousInformationFlag::kBLE, CHIP_ERROR_INVALID_ARGUMENT);
+
+    return PairWithCode(remoteId, payload);
+}
+
+CHIP_ERROR PairingCommand::PairWithManualCode(NodeId remoteId)
+{
+    SetupPayload payload;
+    ReturnErrorOnFailure(ManualSetupPayloadParser(mOnboardingPayload).populatePayload(payload));
+    return PairWithCode(remoteId, payload);
+}
+
+CHIP_ERROR PairingCommand::PairWithCode(NodeId remoteId, SetupPayload payload)
+{
+    RendezvousParameters params = RendezvousParameters()
+                                      .SetSetupPINCode(payload.setUpPINCode)
+                                      .SetDiscriminator(payload.discriminator)
+                                      .SetPeerAddress(PeerAddress::BLE());
+
+    return GetExecContext()->commissioner->PairDevice(remoteId, params);
 }
 
 CHIP_ERROR PairingCommand::Pair(NodeId remoteId, PeerAddress address)
@@ -71,51 +135,33 @@ CHIP_ERROR PairingCommand::Pair(NodeId remoteId, PeerAddress address)
     RendezvousParameters params =
         RendezvousParameters().SetSetupPINCode(mSetupPINCode).SetDiscriminator(mDiscriminator).SetPeerAddress(address);
 
-    return mCommissioner.PairDevice(remoteId, params);
+    return GetExecContext()->commissioner->PairDevice(remoteId, params);
 }
 
 CHIP_ERROR PairingCommand::PairWithoutSecurity(NodeId remoteId, PeerAddress address)
 {
     ChipSerializedDevice serializedTestDevice;
-    return mCommissioner.PairTestDeviceWithoutSecurity(remoteId, address, serializedTestDevice);
+    return GetExecContext()->commissioner->PairTestDeviceWithoutSecurity(remoteId, address, serializedTestDevice);
 }
 
 CHIP_ERROR PairingCommand::Unpair(NodeId remoteId)
 {
-    SetCommandExitStatus(true);
-    return mCommissioner.UnpairDevice(remoteId);
+    CHIP_ERROR err = GetExecContext()->commissioner->UnpairDevice(remoteId);
+    SetCommandExitStatus(err);
+    return err;
 }
 
-void PairingCommand::OnStatusUpdate(RendezvousSessionDelegate::Status status)
+void PairingCommand::OnStatusUpdate(DevicePairingDelegate::Status status)
 {
     switch (status)
     {
-    case RendezvousSessionDelegate::Status::SecurePairingSuccess:
+    case DevicePairingDelegate::Status::SecurePairingSuccess:
         ChipLogProgress(chipTool, "Secure Pairing Success");
         break;
-    case RendezvousSessionDelegate::Status::SecurePairingFailed:
+    case DevicePairingDelegate::Status::SecurePairingFailed:
         ChipLogError(chipTool, "Secure Pairing Failed");
         break;
-    case RendezvousSessionDelegate::Status::NetworkProvisioningSuccess:
-        ChipLogProgress(chipTool, "Network Provisioning Success");
-        break;
-    case RendezvousSessionDelegate::Status::NetworkProvisioningFailed:
-        ChipLogError(chipTool, "Network Provisioning Failed");
-        break;
     }
-}
-
-void PairingCommand::OnNetworkCredentialsRequested(RendezvousDeviceCredentialsDelegate * callback)
-{
-    ChipLogProgress(chipTool, "OnNetworkCredentialsRequested");
-    callback->SendNetworkCredentials(mSSID, mPassword);
-}
-
-void PairingCommand::OnOperationalCredentialsRequested(const char * csr, size_t csr_length,
-                                                       RendezvousDeviceCredentialsDelegate * callback)
-{
-    // TODO Implement this
-    ChipLogProgress(chipTool, "OnOperationalCredentialsRequested");
 }
 
 void PairingCommand::OnPairingComplete(CHIP_ERROR err)
@@ -123,13 +169,17 @@ void PairingCommand::OnPairingComplete(CHIP_ERROR err)
     if (err == CHIP_NO_ERROR)
     {
         ChipLogProgress(chipTool, "Pairing Success");
+        err = SetupNetwork();
     }
     else
     {
-        ChipLogProgress(chipTool, "Pairing Failure: %s", chip::ErrorStr(err));
+        ChipLogProgress(chipTool, "Pairing Failure: %s", ErrorStr(err));
     }
 
-    SetCommandExitStatus(err == CHIP_NO_ERROR);
+    if (err != CHIP_NO_ERROR)
+    {
+        SetCommandExitStatus(err);
+    }
 }
 
 void PairingCommand::OnPairingDeleted(CHIP_ERROR err)
@@ -140,8 +190,218 @@ void PairingCommand::OnPairingDeleted(CHIP_ERROR err)
     }
     else
     {
-        ChipLogProgress(chipTool, "Pairing Deleted Failure: %s", chip::ErrorStr(err));
+        ChipLogProgress(chipTool, "Pairing Deleted Failure: %s", ErrorStr(err));
     }
 
-    SetCommandExitStatus(err == CHIP_NO_ERROR);
+    SetCommandExitStatus(err);
+}
+
+void PairingCommand::OnCommissioningComplete(NodeId nodeId, CHIP_ERROR err)
+{
+    if (err == CHIP_NO_ERROR)
+    {
+        ChipLogProgress(chipTool, "Device commissioning completed with success");
+    }
+    else
+    {
+        ChipLogProgress(chipTool, "Device commissioning Failure: %s", ErrorStr(err));
+    }
+
+    SetCommandExitStatus(err);
+}
+
+CHIP_ERROR PairingCommand::SetupNetwork()
+{
+
+    CHIP_ERROR err = CHIP_NO_ERROR;
+
+    switch (mNetworkType)
+    {
+    case PairingNetworkType::None:
+    case PairingNetworkType::Ethernet:
+        // Nothing to do other than to resolve the device's operational address.
+        err = UpdateNetworkAddress();
+        VerifyOrExit(err == CHIP_NO_ERROR,
+                     ChipLogError(chipTool, "Setup failure! Error calling UpdateNetworkAddress: %s", ErrorStr(err)));
+        break;
+    case PairingNetworkType::WiFi:
+    case PairingNetworkType::Thread:
+        err = GetExecContext()->commissioner->GetDevice(mRemoteId, &mDevice);
+        VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(chipTool, "Setup failure! No pairing for device: %" PRIu64, mRemoteId));
+
+        mCluster.Associate(mDevice, mEndpointId);
+
+        err = AddNetwork(mNetworkType);
+        VerifyOrExit(err == CHIP_NO_ERROR,
+                     ChipLogError(chipTool, "Setup failure! Error calling AddWiFiNetwork: %s", ErrorStr(err)));
+        break;
+    }
+
+exit:
+    return err;
+}
+
+void PairingCommand::InitCallbacks()
+{
+    mOnAddThreadNetworkCallback =
+        new Callback::Callback<NetworkCommissioningClusterAddThreadNetworkResponseCallback>(OnAddNetworkResponse, this);
+    mOnAddWiFiNetworkCallback =
+        new Callback::Callback<NetworkCommissioningClusterAddWiFiNetworkResponseCallback>(OnAddNetworkResponse, this);
+    mOnEnableNetworkCallback =
+        new Callback::Callback<NetworkCommissioningClusterEnableNetworkResponseCallback>(OnEnableNetworkResponse, this);
+    mOnFailureCallback = new Callback::Callback<DefaultFailureCallback>(OnDefaultFailureResponse, this);
+}
+
+void PairingCommand::Shutdown()
+{
+    delete mOnAddThreadNetworkCallback;
+    delete mOnAddWiFiNetworkCallback;
+    delete mOnEnableNetworkCallback;
+    delete mOnFailureCallback;
+}
+
+CHIP_ERROR PairingCommand::AddNetwork(PairingNetworkType networkType)
+{
+    return (networkType == PairingNetworkType::WiFi) ? AddWiFiNetwork() : AddThreadNetwork();
+}
+
+CHIP_ERROR PairingCommand::AddThreadNetwork()
+{
+    Callback::Cancelable * successCallback = mOnAddThreadNetworkCallback->Cancel();
+    Callback::Cancelable * failureCallback = mOnFailureCallback->Cancel();
+
+    return mCluster.AddThreadNetwork(successCallback, failureCallback, mOperationalDataset, kBreadcrumb, kTimeoutMs);
+}
+
+CHIP_ERROR PairingCommand::AddWiFiNetwork()
+{
+    Callback::Cancelable * successCallback = mOnAddWiFiNetworkCallback->Cancel();
+    Callback::Cancelable * failureCallback = mOnFailureCallback->Cancel();
+
+    return mCluster.AddWiFiNetwork(successCallback, failureCallback, mSSID, mPassword, kBreadcrumb, kTimeoutMs);
+}
+
+chip::ByteSpan PairingCommand::GetThreadNetworkId()
+{
+    // For Thread devices the networkId is the extendedPanId and it is
+    // part of the dataset defined by OpenThread
+
+    Thread::OperationalDataset dataset;
+
+    if (dataset.Init(mOperationalDataset) != CHIP_NO_ERROR)
+    {
+        return ByteSpan();
+    }
+
+    if (dataset.GetExtendedPanId(mExtendedPanId) != CHIP_NO_ERROR)
+    {
+        return ByteSpan();
+    }
+
+    return ByteSpan(mExtendedPanId);
+}
+
+CHIP_ERROR PairingCommand::EnableNetwork()
+{
+    Callback::Cancelable * successCallback = mOnEnableNetworkCallback->Cancel();
+    Callback::Cancelable * failureCallback = mOnFailureCallback->Cancel();
+
+    ByteSpan networkId;
+    if (mNetworkType == PairingNetworkType::WiFi)
+    {
+        networkId = mSSID;
+    }
+    else
+    {
+        networkId = GetThreadNetworkId();
+    }
+
+    if (networkId.empty())
+    {
+        return CHIP_ERROR_INVALID_ARGUMENT;
+    }
+
+    return mCluster.EnableNetwork(successCallback, failureCallback, networkId, kBreadcrumb, kTimeoutMs);
+}
+
+void PairingCommand::OnDefaultFailureResponse(void * context, uint8_t status)
+{
+    ChipLogProgress(chipTool, "Default Failure Response: 0x%02x", status);
+
+    PairingCommand * command = reinterpret_cast<PairingCommand *>(context);
+    command->SetCommandExitStatus(CHIP_ERROR_INTERNAL);
+}
+
+void PairingCommand::OnAddNetworkResponse(void * context, uint8_t errorCode, uint8_t * debugText)
+{
+    ChipLogProgress(chipTool, "AddNetworkResponse");
+
+    PairingCommand * command = reinterpret_cast<PairingCommand *>(context);
+
+    // Normally, the errorCode should be checked, but the current codebase send a default response
+    // instead of the command specific response. So errorCode is not set correctly.
+    // if (EMBER_ZCL_NETWORK_COMMISSIONING_ERROR_SUCCESS != errorCode)
+    // {
+    //    ChipLogError(chipTool, "Setup failure. Error calling EnableNetwork: %d", errorCode);
+    //    command->SetCommandExitStatus(CHIP_ERROR_INTERNAL);
+    //    return;
+    // }
+
+    CHIP_ERROR err = command->EnableNetwork();
+    if (CHIP_NO_ERROR != err)
+    {
+        ChipLogError(chipTool, "Setup failure. Internal error calling EnableNetwork: %s", ErrorStr(err));
+        command->SetCommandExitStatus(err);
+        return;
+    }
+
+    // When the accessory is configured as a SoftAP and WiFi is configured to an other network
+    // there won't be any response since the WiFi network is changing.
+    // So returns early, assuming everything goes well
+    // and the device address will be updated once a command is issued.
+    if (command->mPairingMode == PairingMode::SoftAP && command->mNetworkType == PairingNetworkType::WiFi)
+    {
+        command->SetCommandExitStatus(CHIP_NO_ERROR);
+    }
+}
+
+void PairingCommand::OnEnableNetworkResponse(void * context, uint8_t errorCode, uint8_t * debugText)
+{
+    ChipLogProgress(chipTool, "EnableNetworkResponse");
+
+    PairingCommand * command = reinterpret_cast<PairingCommand *>(context);
+
+    // Normally, the errorCode should be checked, but the current codebase send a default response
+    // instead of the command specific response. So errorCode is not set correctly.
+    // if (EMBER_ZCL_NETWORK_COMMISSIONING_ERROR_SUCCESS != errorCode)
+    // {
+    //    ChipLogError(chipTool, "Setup failure. Error calling EnableNetwork: %d", errorCode);
+    //    command->SetCommandExitStatus(CHIP_ERROR_INTERNAL);
+    //    return;
+    // }
+
+    CHIP_ERROR err = command->UpdateNetworkAddress();
+    if (CHIP_NO_ERROR != err)
+    {
+        ChipLogError(chipTool, "Setup failure. Internal error calling UpdateNetworkAddress: %s", ErrorStr(err));
+        command->SetCommandExitStatus(err);
+        return;
+    }
+}
+
+CHIP_ERROR PairingCommand::UpdateNetworkAddress()
+{
+    ChipLogProgress(chipTool, "Mdns: Updating NodeId: %" PRIx64 " FabricId: %" PRIx64 " ...", mRemoteId, mFabricId);
+    return GetExecContext()->commissioner->UpdateDevice(mRemoteId, mFabricId);
+}
+
+void PairingCommand::OnAddressUpdateComplete(NodeId nodeId, CHIP_ERROR err)
+{
+    ChipLogProgress(chipTool, "OnAddressUpdateComplete: %s", ErrorStr(err));
+    if (err != CHIP_NO_ERROR)
+    {
+        // Set exit status only if the address update failed.
+        // Otherwise wait for OnCommissioningComplete() callback.
+        SetCommandExitStatus(err);
+    }
 }

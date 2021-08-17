@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include <app/AppBuildConfig.h>
+
 using namespace chip;
 using namespace chip::TLV;
 
@@ -42,28 +44,28 @@ CHIP_ERROR StatusElement::Parser::Init(const chip::TLV::TLVReader & aReader)
     mReader.Init(aReader);
     VerifyOrExit(chip::TLV::kTLVType_Array == mReader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
 
-    // This is just a dummy, as we're not going to exit this container ever
-    chip::TLV::TLVType OuterContainerType;
-    err = mReader.EnterContainer(OuterContainerType);
+    err = mReader.EnterContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
     return err;
 }
 
-CHIP_ERROR StatusElement::Parser::DecodeStatusElement(uint16_t * apGeneralCode, uint32_t * apProtocolId, uint16_t * apProtocolCode,
-                                                      chip::ClusterId * apClusterId) const
+CHIP_ERROR StatusElement::Parser::DecodeStatusElement(Protocols::SecureChannel::GeneralStatusCode * apGeneralCode,
+                                                      uint32_t * apProtocolId, uint16_t * apProtocolCode) const
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     chip::TLV::TLVReader lReader;
 
+    uint16_t generalCode;
     lReader.Init(mReader);
 
     err = lReader.Next();
     SuccessOrExit(err);
     VerifyOrExit(lReader.GetType() == chip::TLV::kTLVType_UnsignedInteger, err = CHIP_ERROR_WRONG_TLV_TYPE);
-    err = lReader.Get(*apGeneralCode);
+    err = lReader.Get(generalCode);
     SuccessOrExit(err);
+    *apGeneralCode = static_cast<Protocols::SecureChannel::GeneralStatusCode>(generalCode);
 
     err = lReader.Next();
     SuccessOrExit(err);
@@ -75,12 +77,6 @@ CHIP_ERROR StatusElement::Parser::DecodeStatusElement(uint16_t * apGeneralCode, 
     SuccessOrExit(err);
     VerifyOrExit(lReader.GetType() == chip::TLV::kTLVType_UnsignedInteger, err = CHIP_ERROR_WRONG_TLV_TYPE);
     err = lReader.Get(*apProtocolCode);
-    SuccessOrExit(err);
-
-    err = lReader.Next();
-    SuccessOrExit(err);
-    VerifyOrExit(lReader.GetType() == chip::TLV::kTLVType_UnsignedInteger, err = CHIP_ERROR_WRONG_TLV_TYPE);
-    err = lReader.Get(*apClusterId);
     SuccessOrExit(err);
 
 exit:
@@ -151,22 +147,6 @@ CHIP_ERROR StatusElement::Parser::CheckSchemaValidity() const
             }
 #endif // CHIP_DETAIL_LOGGING
         }
-        else if (!(TagPresenceMask & (1 << kCsTag_ClusterId)))
-        {
-            TagPresenceMask |= (1 << kCsTag_ClusterId);
-
-            VerifyOrExit(chip::TLV::kTLVType_UnsignedInteger == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
-
-#if CHIP_DETAIL_LOGGING
-            {
-                chip::ClusterId clusterId;
-                err = reader.Get(clusterId);
-                SuccessOrExit(err);
-
-                PRETTY_PRINT("\tClusterId = 0x%" PRIx32 ",", clusterId);
-            }
-#endif // CHIP_DETAIL_LOGGING
-        }
         else
         {
             PRETTY_PRINT("\tExtra element in StatusElement");
@@ -190,6 +170,8 @@ CHIP_ERROR StatusElement::Parser::CheckSchemaValidity() const
             err = CHIP_ERROR_IM_MALFORMED_STATUS_CODE;
         }
     }
+    SuccessOrExit(err);
+    err = reader.ExitContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
@@ -208,24 +190,20 @@ CHIP_ERROR StatusElement::Builder::Init(chip::TLV::TLVWriter * const apWriter, c
     return ListBuilder::Init(apWriter, aContextTagToUse);
 }
 
-StatusElement::Builder & StatusElement::Builder::EncodeStatusElement(const uint16_t aGeneralCode, const uint32_t aProtocolId,
-                                                                     const uint16_t aStatusElement,
-                                                                     const chip::ClusterId aClusterId)
+StatusElement::Builder & StatusElement::Builder::EncodeStatusElement(const Protocols::SecureChannel::GeneralStatusCode aGeneralCode,
+                                                                     const uint32_t aProtocolId, const uint16_t aProtocolCode)
 {
     uint64_t tag = chip::TLV::AnonymousTag;
 
     SuccessOrExit(mError);
 
-    mError = mpWriter->Put(tag, aGeneralCode);
+    mError = mpWriter->Put(tag, static_cast<uint16_t>(aGeneralCode));
     SuccessOrExit(mError);
 
     mError = mpWriter->Put(tag, aProtocolId);
     SuccessOrExit(mError);
 
-    mError = mpWriter->Put(tag, aStatusElement);
-    SuccessOrExit(mError);
-
-    mError = mpWriter->Put(tag, aClusterId);
+    mError = mpWriter->Put(tag, aProtocolCode);
     SuccessOrExit(mError);
 
 exit:

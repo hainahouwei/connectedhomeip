@@ -55,11 +55,28 @@ default settings by pressing a button. However, this mode does not guarantee
 that the device will be able to communicate with the CHIP controller and other
 devices.
 
+### SE051H Secure Element
+
+Deployment of this firmware configuration requires the K32W061 board setups
+using the K32W0/JN5189 module board, SE051 Expansion board and Generic Expansion
+board as shown below:
+
+![SE051H  + K32W061 DK6](../../platform/k32w/doc/images/k32w-se.jpg)
+
+The SE051H Secure Element extension may be used for best in class security and
+offloading some of the Project CHIP cryptographic operations. Depending on your
+hardware configuration, choose one of the options below (building with or
+without Secure Element). NOTE: the SE051H is a derivative of the SE051 product
+family (see http://www.nxp.com/SE051) including dedicated CHIP support in
+addition to the SE051 feature set. See the material provided separately by NXP
+for more details on SE051H.
+
 ### Bluetooth LE Advertising
 
 In this example, to commission the device onto a Project CHIP network, it must
-be discoverable over Bluetooth LE. Bluetooth LE advertising is started
-automatically when the device is powered up.
+be discoverable over Bluetooth LE. For security reasons, you must start
+Bluetooth LE advertising manually after powering up the device by pressing
+Button USERINTERFACE.
 
 ### Bluetooth LE Rendezvous
 
@@ -69,7 +86,9 @@ has the commissioner role.
 
 To start the rendezvous, the controller must get the commissioning information
 from the CHIP device. The data payload is encoded within a QR code, printed to
-the UART console.
+the UART console and shared using an NFC tag. For security reasons, you must
+start NFC tag emulation manually after powering up the device by pressing
+Button 4.
 
 ### Thread Provisioning
 
@@ -105,12 +124,12 @@ states are depicted:
 **LED D3** shows the state of the simulated light bulb. When the LED is lit the
 light bulb is on; when not lit, the light bulb is off.
 
-**Button SW2** can be used to reset the device to a default state. Pressing and
-holding Button SW3 for 6 seconds initiates a factory reset. After an initial
-period of 3 seconds, LED2 D2 and D3 will flash in unison to signal the pending
-reset. Holding the button past 6 seconds will cause the device to reset its
-persistent configuration and initiate a reboot. The reset action can be
-cancelled by releasing the button at any point before the 6 second limit.
+**Button SW2** can be used to reset the device to a default state. A short Press
+Button SW2 initiates a factory reset. After an initial period of 3 seconds, LED2
+D2 and D3 will flash in unison to signal the pending reset. After 6 seconds will
+cause the device to reset its persistent configuration and initiate a reboot.
+The reset action can be cancelled by press SW2 button at any point before the 6
+second limit.
 
 **Button SW3** can be used to change the state of the simulated light bulb. This
 can be used to mimic a user manually operating a switch. The button behaves as a
@@ -120,7 +139,21 @@ toggle, swapping the state every time it is pressed.
 a Border Router. Default parameters for a Thread network are hard-coded and are
 being used if this button is pressed.
 
-The remaining two LEDs (D1/D2) and button (SW1) are unused.
+The remaining two LEDs (D1/D4) and button (SW1) are unused.
+
+Directly on the development board, **Button USERINTERFACE** can be used for
+enabling Bluetooth LE advertising for a predefined period of time. Also, pushing
+this button starts the NFC emulation by writing the onboarding information in
+the NTAG.
+
+### No expansion board
+
+In case the **OM15082** Expansion board is not attached to the DK6 board, the
+functionality of LED D2 and LED D3 is taken over by LED DS2, respectively LED
+DS3, which can be found on the DK6 board.
+
+Also, by long pressing the **USERINTERFACE** button, the factory reset action
+will be initiated.
 
 <a name="building"></a>
 
@@ -129,27 +162,38 @@ The remaining two LEDs (D1/D2) and button (SW1) are unused.
 In order to build the Project CHIP example, we recommend using a Linux
 distribution (the demo-application was compiled on Ubuntu 20.04).
 
--   Download [K32W061 SDK 2.6.2 for Project CHIP](https://mcuxpresso.nxp.com/).
+-   Download [K32W061 SDK 2.6.3 for Project CHIP](https://mcuxpresso.nxp.com/).
     Creating an nxp.com account is required before being able to download the
     SDK. Once the account is created, login and follow the steps for downloading
-    SDK_2.6.2_K32W061DK6. The SDK Builder UI selection should be similar with
+    SDK_2.6.3_K32W061DK6. The SDK Builder UI selection should be similar with
     the one from the image below.
     ![MCUXpresso SDK Download](../../platform/k32w/doc/images/mcux-sdk-download.JPG)
 
--   Start building the application
+-   Start building the application either with Secure Element or without
+    -   with Secure Element
 
 ```
-user@ubuntu:~/Desktop/git/connectedhomeip$ export K32W061_SDK_ROOT=/home/user/Desktop/SDK_2.6.2_K32W061DK6/
-user@ubuntu:~/Desktop/git/connectedhomeip$ ./third_party/k32w_sdk/mr2_fixes/patch_k32w_mr2_sdk.sh
+user@ubuntu:~/Desktop/git/connectedhomeip$ export K32W061_SDK_ROOT=/home/user/Desktop/SDK_2.6.3_K32W061DK6/
+user@ubuntu:~/Desktop/git/connectedhomeip$ ./third_party/k32w_sdk/sdk_fixes/patch_k32w_sdk.sh
 user@ubuntu:~/Desktop/git/connectedhomeip$ source ./scripts/activate.sh
-user@ubuntu:~/Desktop/git/connectedhomeip/third_party/openthread/repo$ cd examples/lighting-app/k32w/
-user@ubuntu:~/Desktop/git/connectedhomeip/examples/lighting-app/k32w$ gn gen out/debug --args="k32w_sdk_root=\"${K32W061_SDK_ROOT}\" is_debug=true"
+user@ubuntu:~/Desktop/git/connectedhomeip$ cd examples/lighting-app/k32w/
+user@ubuntu:~/Desktop/git/connectedhomeip/examples/lighting-app/k32w$ gn gen out/debug --args="k32w_sdk_root=\"${K32W061_SDK_ROOT}\" chip_with_OM15082=1 chip_with_ot_cli=0 is_debug=false chip_crypto=\"mbedtls\" chip_with_se05x=1"
 user@ubuntu:~/Desktop/git/connectedhomeip/examples/lightin-app/k32w$ ninja -C out/debug
 user@ubuntu:~/Desktop/git/connectedhomeip/examples/lighting-app/k32w$ $K32W061_SDK_ROOT/tools/imagetool/sign_images.sh out/debug/
 ```
 
-Note that "patch_k32w_mr2_sdk.sh" script must be run for patching the K32W061
-SDK 2.6.2.
+    -   without Secure element
+        Exactly the same steps as above but set chip_with_se05x=0 in the gn command
+
+Note that "patch_k32w_sdk.sh" script must be run for patching the K32W061 SDK
+2.6.3.
+
+Also, in case the OM15082 Expansion Board is not attached to the DK6 board, the
+build argument (chip_with_OM15082) inside the gn build instruction should be set
+to zero. The argument chip_with_OM15082 is set to zero by default.
+
+In case that Openthread CLI is needed, chip_with_ot_cli build argument must be
+set to 1.
 
 In case signing errors are encountered when running the "sign_images.sh" script
 install the recommanded packages (python version > 3, pip3, pycrypto,
