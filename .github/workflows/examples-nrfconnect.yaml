@@ -112,7 +112,7 @@ jobs:
                   name:
                       ${{ env.BUILD_TYPE }}-example-build-${{
                       steps.outsuffix.outputs.value }}
-                  path: /tmp/output_binaries/
+                  path: examples/lock-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/
 #                  path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
 
             # https://github.com/project-chip/connectedhomeip/issues/3100

@@ -63,4 +63,6 @@ jobs:
               if: always()
               with:
                 name: CHIPTool_apk
-                path: out
+                path: out/android-x64-chip_tool/outputs/apk/debug/app-debug.apk
+                      # out/android-arm-chip_tool/outputs/apk/debug/app-debug.apk
+                      # out/android-arm64-chip_tool/outputs/apk/debug/app-debug.apk
