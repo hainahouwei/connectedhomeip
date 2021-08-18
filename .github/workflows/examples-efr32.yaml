@@ -94,10 +94,13 @@ jobs:
                       ${{ env.BUILD_TYPE }}-example-build-${{
                       steps.outsuffix.outputs.value }}
                   path: |
-                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out
-                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out.map
-                      out/lighting_app_debug_rpc/BRD4161A/chip-efr32-lighting-example.out
-                      out/lighting_app_debug_rpc/BRD4161A/chip-efr32-lighting-example.out.map
+                      out/
+#                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out
+#                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out.map
+#                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out
+#                      out/lock_app_debug/BRD4161A/chip-efr32-lock-example.out.map
+#                      out/lighting_app_debug_rpc/BRD4161A/chip-efr32-lighting-example.out
+#                      out/lighting_app_debug_rpc/BRD4161A/chip-efr32-lighting-example.out.map
             - name: Remove third_party binaries for CodeQL Analysis
               run: find out -type d -name "third_party" -exec rm -rf {} +
             - name: Remove SiliconLabs binaries for CodeQL Analysis
@@ -105,9 +108,10 @@ jobs:
 #             - name: Perform CodeQL Analysis
 #               if: ${{ github.event_name == 'push' }}
 #               uses: github/codeql-action/analyze@v1
-            - name : upload s37
-              uses: actions/upload-artifact@master
-              if: always()
-              with:
-                name: EFR32_Light
-                path: out/lighting-app/BRD4161A/chip-efr32-lighting-example.s37
+#            - name : upload s37
+#              uses: actions/upload-artifact@master
+#              if: always()
+#              with:
+#                name: EFR32_Light
+#                path: out/lighting-app/BRD4161A/chip-efr32-lighting-example.s37
+                
