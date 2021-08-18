@@ -102,9 +102,10 @@ jobs:
             - name: test
               run: |
                   apt-get install tree
+              timeout-minutes: 2
                   pwd
-                  tree
                   ls
+                  tree
             - name: Binary artifact suffix
               id: outsuffix
               uses: haya14busa/action-cond@v1.0.0
