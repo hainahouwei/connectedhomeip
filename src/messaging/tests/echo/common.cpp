@@ -27,10 +27,12 @@
 #include "common.h"
 #include <core/CHIPCore.h>
 #include <platform/CHIPDeviceLayer.h>
+#include <protocols/secure_channel/MessageCounterManager.h>
 #include <support/ErrorStr.h>
 
-// The ExchangeManager global object.
+chip::SecureSessionMgr gSessionManager;
 chip::Messaging::ExchangeManager gExchangeManager;
+chip::secure_channel::MessageCounterManager gMessageCounterManager;
 
 void InitializeChip(void)
 {
@@ -56,6 +58,8 @@ exit:
 
 void ShutdownChip(void)
 {
-    gExchangeManager.Shutdown();
     chip::DeviceLayer::PlatformMgr().Shutdown();
+    gMessageCounterManager.Shutdown();
+    gExchangeManager.Shutdown();
+    gSessionManager.Shutdown();
 }

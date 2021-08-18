@@ -113,6 +113,12 @@ const char * AddressTypeStr(chip::Inet::IPAddressType addressType)
     }
 }
 
+void ShutdownEndpoint(mdns::Minimal::ServerBase::EndpointInfo & aEndpoint)
+{
+    aEndpoint.udp->Free();
+    aEndpoint.udp = nullptr;
+}
+
 } // namespace
 
 ServerBase::~ServerBase()
@@ -126,10 +132,21 @@ void ServerBase::Shutdown()
     {
         if (mEndpoints[i].udp != nullptr)
         {
-            mEndpoints[i].udp->Free();
-            mEndpoints[i].udp = nullptr;
+            ShutdownEndpoint(mEndpoints[i]);
         }
     }
+}
+
+bool ServerBase::IsListening() const
+{
+    for (size_t i = 0; i < mEndpointCount; i++)
+    {
+        if (mEndpoints[i].udp != nullptr)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 CHIP_ERROR ServerBase::Listen(chip::Inet::InetLayer * inetLayer, ListenIterator * it, uint16_t port)
@@ -154,10 +171,7 @@ CHIP_ERROR ServerBase::Listen(chip::Inet::InetLayer * inetLayer, ListenIterator 
 
         ReturnErrorOnFailure(info->udp->Bind(addressType, chip::Inet::IPAddress::Any, port, interfaceId));
 
-        info->udp->AppState          = static_cast<void *>(this);
-        info->udp->OnMessageReceived = OnUdpPacketReceived;
-
-        ReturnErrorOnFailure(info->udp->Listen());
+        ReturnErrorOnFailure(info->udp->Listen(OnUdpPacketReceived, nullptr /*OnReceiveError*/, this));
 
         CHIP_ERROR err = JoinMulticastGroup(interfaceId, info->udp, addressType);
         if (err != CHIP_NO_ERROR)
@@ -168,9 +182,12 @@ CHIP_ERROR ServerBase::Listen(chip::Inet::InetLayer * inetLayer, ListenIterator 
             // Log only as non-fatal error. Failure to join will mean we reply to unicast queries only.
             ChipLogError(DeviceLayer, "MDNS failed to join multicast group on %s for address type %s: %s", interfaceName,
                          AddressTypeStr(addressType), chip::ErrorStr(err));
+            ShutdownEndpoint(mEndpoints[endpointIndex]);
         }
-
-        endpointIndex++;
+        else
+        {
+            endpointIndex++;
+        }
     }
 
     return autoShutdown.ReturnSuccess();
@@ -205,7 +222,7 @@ CHIP_ERROR ServerBase::DirectSend(chip::System::PacketBufferHandle && data, cons
     return CHIP_ERROR_NOT_CONNECTED;
 }
 
-CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle data, uint16_t port, chip::Inet::InterfaceId interface)
+CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle && data, uint16_t port, chip::Inet::InterfaceId interface)
 {
     for (size_t i = 0; i < mEndpointCount; i++)
     {
@@ -252,8 +269,19 @@ CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle data, uint
     return CHIP_NO_ERROR;
 }
 
-CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle data, uint16_t port)
+CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle && data, uint16_t port)
 {
+    // Broadcast requires sending data multiple times, each of which may error
+    // out, yet broadcast only has a single error code.
+    //
+    // The general logic of error handling is:
+    //   - if no send done at all, return error
+    //   - if at least one broadcast succeeds, assume success overall
+    //   + some internal consistency validations for state error.
+
+    bool hadSuccesfulSend = false;
+    CHIP_ERROR lastError  = CHIP_ERROR_NO_ENDPOINT;
+
     for (size_t i = 0; i < mEndpointCount; i++)
     {
         EndpointInfo * info = &mEndpoints[i];
@@ -282,26 +310,32 @@ CHIP_ERROR ServerBase::BroadcastSend(chip::System::PacketBufferHandle data, uint
 #endif
         else
         {
+            // This is a general error of internal consistency: every address has a known type
+            // Fail completely otherwise.
             return CHIP_ERROR_INCORRECT_STATE;
         }
 
-        if (err == chip::System::MapErrorPOSIX(ENETUNREACH))
+        if (err == CHIP_NO_ERROR)
         {
-            // Send attempted to an unreachable network. Generally should not happen if
-            // interfaces are configured properly, however such a failure to broadcast
-            // may not be critical either.
-            ChipLogError(Discovery, "Attempt to mDNS broadcast to an unreachable destination.");
+            hadSuccesfulSend = true;
+            ChipLogProgress(Discovery, "mDNS broadcast success");
         }
-        else if (err != CHIP_NO_ERROR)
+        else
         {
-            return err;
+            ChipLogError(Discovery, "Attempt to mDNS broadcast failed:  %s", chip::ErrorStr(err));
+            lastError = err;
         }
+    }
+
+    if (!hadSuccesfulSend)
+    {
+        return lastError;
     }
 
     return CHIP_NO_ERROR;
 }
 
-void ServerBase::OnUdpPacketReceived(chip::Inet::IPEndPointBasis * endPoint, chip::System::PacketBufferHandle buffer,
+void ServerBase::OnUdpPacketReceived(chip::Inet::IPEndPointBasis * endPoint, chip::System::PacketBufferHandle && buffer,
                                      const chip::Inet::IPPacketInfo * info)
 {
     ServerBase * srv = static_cast<ServerBase *>(endPoint->AppState);

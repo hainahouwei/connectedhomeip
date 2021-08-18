@@ -29,13 +29,6 @@
 #include <support/SafeInt.h>
 #include <transport/SecureMessageCodec.h>
 
-// Maximum length of application data that can be encrypted as one block.
-// The limit is derived from IPv6 MTU (1280 bytes) - expected header overheads.
-// This limit would need additional reviews once we have formalized Secure Transport header.
-//
-// TODO: this should be checked within the transport message sending instead of the session management layer.
-static const size_t kMax_SecureSDU_Length = 1024;
-
 namespace chip {
 
 using System::PacketBuffer;
@@ -43,29 +36,23 @@ using System::PacketBufferHandle;
 
 namespace SecureMessageCodec {
 
-CHIP_ERROR Encode(NodeId localNodeId, Transport::PeerConnectionState * state, PayloadHeader & payloadHeader,
-                  PacketHeader & packetHeader, System::PacketBufferHandle & msgBuf)
+CHIP_ERROR Encode(Transport::PeerConnectionState * state, PayloadHeader & payloadHeader, PacketHeader & packetHeader,
+                  System::PacketBufferHandle & msgBuf, MessageCounter & counter)
 {
     VerifyOrReturnError(!msgBuf.IsNull(), CHIP_ERROR_INVALID_ARGUMENT);
     VerifyOrReturnError(!msgBuf->HasChainedBuffer(), CHIP_ERROR_INVALID_MESSAGE_LENGTH);
-    VerifyOrReturnError(msgBuf->TotalLength() < kMax_SecureSDU_Length, CHIP_ERROR_INVALID_MESSAGE_LENGTH);
+    VerifyOrReturnError(msgBuf->TotalLength() <= kMaxAppMessageLen, CHIP_ERROR_MESSAGE_TOO_LONG);
 
-    uint32_t msgId = state->GetSendMessageIndex();
+    uint32_t msgId = counter.Value();
 
     static_assert(std::is_same<decltype(msgBuf->TotalLength()), uint16_t>::value,
                   "Addition to generate payloadLength might overflow");
 
     packetHeader
-        .SetSourceNodeId(localNodeId) //
-        .SetMessageId(msgId)          //
+        .SetMessageId(msgId) //
         .SetEncryptionKeyID(state->GetPeerKeyID());
 
-    if (state->GetPeerNodeId() != kUndefinedNodeId)
-    {
-        packetHeader.SetDestinationNodeId(state->GetPeerNodeId());
-    }
-
-    packetHeader.GetFlags().Set(Header::FlagValues::kSecure);
+    packetHeader.GetFlags().Set(Header::FlagValues::kEncryptedMessage);
 
     ReturnErrorOnFailure(payloadHeader.EncodeBeforeData(msgBuf));
 
@@ -81,9 +68,9 @@ CHIP_ERROR Encode(NodeId localNodeId, Transport::PeerConnectionState * state, Pa
     VerifyOrReturnError(CanCastTo<uint16_t>(totalLen + taglen), CHIP_ERROR_INTERNAL);
     msgBuf->SetDataLength(static_cast<uint16_t>(totalLen + taglen));
 
-    ChipLogDetail(Inet, "Secure message was encrypted: Msg ID %u", msgId);
+    ChipLogDetail(Inet, "Secure message was encrypted: Msg ID %" PRIu32, msgId);
 
-    state->IncrementSendMessageIndex();
+    ReturnErrorOnFailure(counter.Advance());
     return CHIP_NO_ERROR;
 }
 

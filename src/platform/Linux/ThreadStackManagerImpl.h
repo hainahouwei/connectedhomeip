@@ -18,13 +18,12 @@
 #pragma once
 
 #include <memory>
-#include <thread>
-#include <vector>
 
-#include "platform/internal/CHIPDeviceLayerInternal.h"
-
-#include "dbus/client/thread_api_dbus.hpp"
-#include "platform/internal/DeviceNetworkInfo.h"
+#include <platform/Linux/GlibTypeDeleter.h>
+#include <platform/Linux/dbus/openthread/introspect.h>
+#include <platform/internal/CHIPDeviceLayerInternal.h>
+#include <platform/internal/DeviceNetworkInfo.h>
+#include <support/ThreadOperationalDataset.h>
 
 namespace chip {
 namespace DeviceLayer {
@@ -46,11 +45,9 @@ public:
 
     void _OnPlatformEvent(const ChipDeviceEvent * event);
 
-    CHIP_ERROR _GetThreadProvision(Internal::DeviceNetworkInfo & netInfo, bool includeCredentials);
+    CHIP_ERROR _GetThreadProvision(ByteSpan & netInfo);
 
-    CHIP_ERROR _SetThreadProvision(const Internal::DeviceNetworkInfo & netInfo);
-
-    CHIP_ERROR _SetThreadProvision(const uint8_t * operationalDataset, size_t operationalDatasetLen);
+    CHIP_ERROR _SetThreadProvision(ByteSpan netInfo);
 
     void _ErasePersistentInfo();
 
@@ -74,10 +71,6 @@ public:
 
     void _OnMessageLayerActivityChanged(bool messageLayerIsActive);
 
-    void _OnCHIPoBLEAdvertisingStart();
-
-    void _OnCHIPoBLEAdvertisingStop();
-
     CHIP_ERROR _GetAndLogThreadStatsCounters();
 
     CHIP_ERROR _GetAndLogThreadTopologyMinimal();
@@ -86,9 +79,9 @@ public:
 
     CHIP_ERROR _GetPrimary802154MACAddress(uint8_t * buf);
 
-    CHIP_ERROR _GetFactoryAssignedEUI64(uint8_t (&buf)[8]);
-
     CHIP_ERROR _GetExternalIPv6Address(chip::Inet::IPAddress & addr);
+
+    CHIP_ERROR _GetPollPeriod(uint32_t & buf);
 
     CHIP_ERROR _JoinerStart();
 
@@ -97,21 +90,26 @@ public:
     static ThreadStackManagerImpl sInstance;
 
 private:
-    struct DBusConnectionDeleter
-    {
-        void operator()(DBusConnection * aConnection) { dbus_connection_unref(aConnection); }
-    };
+    static constexpr char kDBusOpenThreadService[]    = "io.openthread.BorderRouter.wpan0";
+    static constexpr char kDBusOpenThreadObjectPath[] = "/io/openthread/BorderRouter/wpan0";
 
-    using UniqueDBusConnection = std::unique_ptr<DBusConnection, DBusConnectionDeleter>;
+    static constexpr char kOpenthreadDeviceRoleDisabled[] = "disabled";
+    static constexpr char kOpenthreadDeviceRoleDetached[] = "detached";
+    static constexpr char kOpenthreadDeviceRoleChild[]    = "child";
+    static constexpr char kOpenthreadDeviceRoleRouter[]   = "router";
+    static constexpr char kOpenthreadDeviceRoleLeader[]   = "leader";
 
-    void _ThreadDevcieRoleChangedHandler(otbr::DBus::DeviceRole role);
+    static constexpr char kPropertyDeviceRole[] = "DeviceRole";
 
-    std::unique_ptr<otbr::DBus::ThreadApiDBus> mThreadApi;
-    UniqueDBusConnection mConnection;
-    std::vector<uint8_t> mOperationalDatasetTlv;
-    Internal::DeviceNetworkInfo mNetworkInfo;
+    std::unique_ptr<OpenthreadIoOpenthreadBorderRouter, GObjectDeleter> mProxy;
+
+    static void OnDbusPropertiesChanged(OpenthreadIoOpenthreadBorderRouter * proxy, GVariant * changed_properties,
+                                        const gchar * const * invalidated_properties, gpointer user_data);
+    void ThreadDevcieRoleChangedHandler(const gchar * role);
+
+    Thread::OperationalDataset mDataset = {};
+
     bool mAttached;
-    std::thread mDBusEventLoop;
 };
 
 } // namespace DeviceLayer

@@ -21,38 +21,15 @@
 
 #include "ServiceNaming.h"
 #include "lib/core/CHIPSafeCasts.h"
+#include "lib/mdns/TxtFields.h"
 #include "lib/mdns/platform/Mdns.h"
 #include "lib/support/logging/CHIPLogging.h"
 #include "platform/CHIPDeviceConfig.h"
 #include "platform/CHIPDeviceLayer.h"
-#include "setup_payload/AdditionalDataPayloadGenerator.h"
+#include "support/CHIPMemString.h"
 #include "support/CodeUtils.h"
 #include "support/ErrorStr.h"
 #include "support/RandUtils.h"
-
-namespace {
-
-uint8_t HexToInt(char c)
-{
-    if ('0' <= c && c <= '9')
-    {
-        return static_cast<uint8_t>(c - '0');
-    }
-    else if ('a' <= c && c <= 'f')
-    {
-        return static_cast<uint8_t>(0x0a + c - 'a');
-    }
-    else if ('A' <= c && c <= 'F')
-    {
-        return static_cast<uint8_t>(0x0a + c - 'A');
-    }
-
-    return UINT8_MAX;
-}
-
-constexpr uint64_t kUndefinedNodeId = 0;
-
-} // namespace
 
 namespace chip {
 namespace Mdns {
@@ -84,12 +61,6 @@ CHIP_ERROR DiscoveryImplPlatform::Start(Inet::InetLayer * inetLayer, uint16_t po
         ChipLogError(Discovery, "Failed to initialize platform mdns: %s", ErrorStr(error));
     }
 
-    error = SetupHostname();
-    if (error != CHIP_NO_ERROR)
-    {
-        ChipLogError(Discovery, "Failed to setup mdns hostname: %s", ErrorStr(error));
-    }
-
     return error;
 }
 
@@ -117,9 +88,13 @@ void DiscoveryImplPlatform::HandleMdnsError(void * context, CHIP_ERROR error)
         {
             publisher->Advertise(publisher->mOperationalAdvertisingParams);
         }
-        if (publisher->mIsCommissionalPublishing)
+        if (publisher->mIsCommissionableNodePublishing)
         {
-            publisher->Advertise(publisher->mCommissioningdvertisingParams);
+            publisher->Advertise(publisher->mCommissionableNodeAdvertisingParams);
+        }
+        if (publisher->mIsCommissionerPublishing)
+        {
+            publisher->Advertise(publisher->mCommissionerAdvertisingParams);
         }
     }
     else
@@ -128,45 +103,18 @@ void DiscoveryImplPlatform::HandleMdnsError(void * context, CHIP_ERROR error)
     }
 }
 
-#if CHIP_ENABLE_ROTATING_DEVICE_ID
-CHIP_ERROR DiscoveryImplPlatform::GenerateRotatingDeviceId(char rotatingDeviceIdHexBuffer[], size_t & rotatingDeviceIdHexBufferSize)
+CHIP_ERROR DiscoveryImplPlatform::GetCommissionableInstanceName(char * instanceName, size_t maxLength)
 {
-    CHIP_ERROR error = CHIP_NO_ERROR;
-    char serialNumber[chip::DeviceLayer::ConfigurationManager::kMaxSerialNumberLength + 1];
-    size_t serialNumberSize  = 0;
-    uint16_t lifetimeCounter = 0;
-    SuccessOrExit(error =
-                      chip::DeviceLayer::ConfigurationMgr().GetSerialNumber(serialNumber, sizeof(serialNumber), serialNumberSize));
-    SuccessOrExit(error = chip::DeviceLayer::ConfigurationMgr().GetLifetimeCounter(lifetimeCounter));
-    SuccessOrExit(error = AdditionalDataPayloadGenerator().generateRotatingDeviceId(
-                      lifetimeCounter, serialNumber, serialNumberSize, rotatingDeviceIdHexBuffer, rotatingDeviceIdHexBufferSize,
-                      rotatingDeviceIdHexBufferSize));
-exit:
-    return error;
-}
-#endif
-
-CHIP_ERROR DiscoveryImplPlatform::SetupHostname()
-{
-#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
-    static char hostname[17]; // Hostname is 64-bit EUI-64 expressed as a 16-character hexadecimal string.
-    uint8_t eui64[8];
-    chip::DeviceLayer::ThreadStackMgr().GetFactoryAssignedEUI64(eui64);
-    snprintf(hostname, sizeof(hostname), "%02X%02X%02X%02X%02X%02X%02X%02X", eui64[0], eui64[1], eui64[2], eui64[3], eui64[4],
-             eui64[5], eui64[6], eui64[7]);
-#else
-    uint8_t mac[6];    // 6 byte wifi mac
-    char hostname[13]; // Hostname will be the hex representation of mac.
-
-    ReturnErrorOnFailure(chip::DeviceLayer::ConfigurationMgr().GetPrimaryWiFiMACAddress(mac));
-    for (size_t i = 0; i < sizeof(mac); i++)
+    if (maxLength < (chip::Mdns::kMaxInstanceNameSize + 1))
     {
-        snprintf(&hostname[i * 2], sizeof(hostname) - i * 2, "%02X", mac[i]);
+        return CHIP_ERROR_NO_MEMORY;
     }
-#endif
-
-    ReturnErrorOnFailure(ChipMdnsSetHostname(hostname));
-
+    size_t len = snprintf(instanceName, maxLength, "%08" PRIX32 "%08" PRIX32, static_cast<uint32_t>(mCommissionInstanceName >> 32),
+                          static_cast<uint32_t>(mCommissionInstanceName));
+    if (len >= maxLength)
+    {
+        return CHIP_ERROR_NO_MEMORY;
+    }
     return CHIP_NO_ERROR;
 }
 
@@ -174,39 +122,54 @@ CHIP_ERROR DiscoveryImplPlatform::Advertise(const CommissionAdvertisingParameter
 {
     CHIP_ERROR error = CHIP_NO_ERROR;
     MdnsService service;
-    char discriminatorBuf[6];
-    char vendorProductBuf[12];
-    char pairingInstrBuf[128];
-    TextEntry textEntries[4];
+    // add newline to lengths for TXT entries
+    char discriminatorBuf[kKeyDiscriminatorMaxLength + 1];
+    char vendorProductBuf[kKeyVendorProductMaxLength + 1];
+    char commissioningModeBuf[kKeyCommissioningModeMaxLength + 1];
+    char additionalPairingBuf[kKeyAdditionalPairingMaxLength + 1];
+    char deviceTypeBuf[kKeyDeviceTypeMaxLength + 1];
+    char deviceNameBuf[kKeyDeviceNameMaxLength + 1];
+    char rotatingIdBuf[kKeyRotatingIdMaxLength + 1];
+    char pairingHintBuf[kKeyPairingHintMaxLength + 1];
+    char pairingInstrBuf[kKeyPairingInstructionMaxLength + 1];
+    // size of textEntries array should be count of Bufs above
+    TextEntry textEntries[CommissionAdvertisingParameters::kTxtMaxNumber];
     size_t textEntrySize = 0;
-    char shortDiscriminatorSubtype[6];
-    char longDiscriminatorSubtype[8];
-    char vendorSubType[8];
-    const char * subTypes[3];
+    // add null-character to the subtypes
+    char shortDiscriminatorSubtype[kSubTypeShortDiscriminatorMaxLength + 1];
+    char longDiscriminatorSubtype[kSubTypeLongDiscriminatorMaxLength + 1];
+    char vendorSubType[kSubTypeVendorMaxLength + 1];
+    char commissioningModeSubType[kSubTypeCommissioningModeMaxLength + 1];
+    char openWindowSubType[kSubTypeAdditionalPairingMaxLength + 1];
+    char deviceTypeSubType[kSubTypeDeviceTypeMaxLength + 1];
+    // size of subTypes array should be count of SubTypes above
+    const char * subTypes[kSubTypeMaxNumber];
     size_t subTypeSize = 0;
-#if CHIP_ENABLE_ROTATING_DEVICE_ID
-    char rotatingDeviceIdHexBuffer[RotatingDeviceId::kHexMaxLength];
-    size_t rotatingDeviceIdHexBufferSize = 0;
-#endif
 
     if (!mMdnsInitialized)
     {
         return CHIP_ERROR_INCORRECT_STATE;
     }
-    snprintf(service.mName, sizeof(service.mName), "%016" PRIX64, mCommissionInstanceName);
-    if (params.GetCommissionAdvertiseMode() == CommssionAdvertiseMode::kCommissioning)
+
+    error = MakeHostName(service.mHostName, sizeof(service.mHostName), params.GetMac());
+    if (error != CHIP_NO_ERROR)
     {
-        strncpy(service.mType, "_chipc", sizeof(service.mType));
+        ChipLogError(Discovery, "Failed to create mdns hostname: %s", ErrorStr(error));
+        return error;
+    }
+
+    ReturnErrorOnFailure(GetCommissionableInstanceName(service.mName, sizeof(service.mName)));
+
+    if (params.GetCommissionAdvertiseMode() == CommssionAdvertiseMode::kCommissionableNode)
+    {
+        strncpy(service.mType, kCommissionableServiceName, sizeof(service.mType));
     }
     else
     {
-        strncpy(service.mType, "_chipd", sizeof(service.mType));
+        strncpy(service.mType, kCommissionerServiceName, sizeof(service.mType));
     }
     service.mProtocol = MdnsServiceProtocol::kMdnsProtocolUdp;
 
-    snprintf(discriminatorBuf, sizeof(discriminatorBuf), "%04u", params.GetLongDiscriminator());
-    textEntries[textEntrySize++] = { "D", reinterpret_cast<const uint8_t *>(discriminatorBuf),
-                                     strnlen(discriminatorBuf, sizeof(discriminatorBuf)) };
     if (params.GetVendorId().HasValue())
     {
         if (params.GetProductId().HasValue())
@@ -221,35 +184,101 @@ CHIP_ERROR DiscoveryImplPlatform::Advertise(const CommissionAdvertisingParameter
         textEntries[textEntrySize++] = { "VP", reinterpret_cast<const uint8_t *>(vendorProductBuf),
                                          strnlen(vendorProductBuf, sizeof(vendorProductBuf)) };
     }
-#if CHIP_ENABLE_ROTATING_DEVICE_ID
-    if (textEntrySize < ArraySize(textEntries))
-    {
-        ReturnErrorOnFailure(GenerateRotatingDeviceId(rotatingDeviceIdHexBuffer, rotatingDeviceIdHexBufferSize));
-        // Rotating Device ID
 
-        textEntries[textEntrySize++] = { "RI", Uint8::from_const_char(rotatingDeviceIdHexBuffer), rotatingDeviceIdHexBufferSize };
-    }
-    else
+    if (params.GetDeviceType().HasValue())
     {
-        return CHIP_ERROR_INVALID_LIST_LENGTH;
-    }
-#endif
-    if (params.GetPairingHint().HasValue() && params.GetPairingInstr().HasValue())
-    {
-        snprintf(pairingInstrBuf, sizeof(pairingInstrBuf), "%s+%u", params.GetPairingInstr().Value(),
-                 params.GetPairingHint().Value());
-        textEntries[textEntrySize++] = { "P", reinterpret_cast<const uint8_t *>(pairingInstrBuf),
-                                         strnlen(pairingInstrBuf, sizeof(pairingInstrBuf)) };
+        snprintf(deviceTypeBuf, sizeof(deviceTypeBuf), "%u", params.GetDeviceType().Value());
+        textEntries[textEntrySize++] = { "DT", reinterpret_cast<const uint8_t *>(deviceTypeBuf),
+                                         strnlen(deviceTypeBuf, sizeof(deviceTypeBuf)) };
     }
 
-    snprintf(shortDiscriminatorSubtype, sizeof(shortDiscriminatorSubtype), "_S%03u", params.GetShortDiscriminator());
-    subTypes[subTypeSize++] = shortDiscriminatorSubtype;
-    snprintf(longDiscriminatorSubtype, sizeof(longDiscriminatorSubtype), "_L%04u", params.GetLongDiscriminator());
-    subTypes[subTypeSize++] = longDiscriminatorSubtype;
+    if (params.GetDeviceName().HasValue())
+    {
+        snprintf(deviceNameBuf, sizeof(deviceNameBuf), "%s", params.GetDeviceName().Value());
+        textEntries[textEntrySize++] = { "DN", reinterpret_cast<const uint8_t *>(deviceNameBuf),
+                                         strnlen(deviceNameBuf, sizeof(deviceNameBuf)) };
+    }
+
+    // Following fields are for nodes and not for commissioners
+    if (params.GetCommissionAdvertiseMode() == CommssionAdvertiseMode::kCommissionableNode)
+    {
+        snprintf(discriminatorBuf, sizeof(discriminatorBuf), "%u", params.GetLongDiscriminator());
+        textEntries[textEntrySize++] = { "D", reinterpret_cast<const uint8_t *>(discriminatorBuf),
+                                         strnlen(discriminatorBuf, sizeof(discriminatorBuf)) };
+
+        snprintf(commissioningModeBuf, sizeof(commissioningModeBuf), "%u", params.GetCommissioningMode() ? 1 : 0);
+        textEntries[textEntrySize++] = { "CM", reinterpret_cast<const uint8_t *>(commissioningModeBuf),
+                                         strnlen(commissioningModeBuf, sizeof(commissioningModeBuf)) };
+
+        if (params.GetCommissioningMode() && params.GetOpenWindowCommissioningMode())
+        {
+            snprintf(additionalPairingBuf, sizeof(additionalPairingBuf), "1");
+            textEntries[textEntrySize++] = { "AP", reinterpret_cast<const uint8_t *>(additionalPairingBuf),
+                                             strnlen(additionalPairingBuf, sizeof(additionalPairingBuf)) };
+        }
+
+        if (params.GetRotatingId().HasValue())
+        {
+            snprintf(rotatingIdBuf, sizeof(rotatingIdBuf), "%s", params.GetRotatingId().Value());
+            textEntries[textEntrySize++] = { "RI", reinterpret_cast<const uint8_t *>(rotatingIdBuf),
+                                             strnlen(rotatingIdBuf, sizeof(rotatingIdBuf)) };
+        }
+
+        if (params.GetPairingHint().HasValue())
+        {
+            snprintf(pairingHintBuf, sizeof(pairingHintBuf), "%u", params.GetPairingHint().Value());
+            textEntries[textEntrySize++] = { "PH", reinterpret_cast<const uint8_t *>(pairingHintBuf),
+                                             strnlen(pairingHintBuf, sizeof(pairingHintBuf)) };
+        }
+
+        if (params.GetPairingInstr().HasValue())
+        {
+            snprintf(pairingInstrBuf, sizeof(pairingInstrBuf), "%s", params.GetPairingInstr().Value());
+            textEntries[textEntrySize++] = { "PI", reinterpret_cast<const uint8_t *>(pairingInstrBuf),
+                                             strnlen(pairingInstrBuf, sizeof(pairingInstrBuf)) };
+        }
+
+        if (MakeServiceSubtype(shortDiscriminatorSubtype, sizeof(shortDiscriminatorSubtype),
+                               DiscoveryFilter(DiscoveryFilterType::kShort, params.GetShortDiscriminator())) == CHIP_NO_ERROR)
+        {
+            subTypes[subTypeSize++] = shortDiscriminatorSubtype;
+        }
+        if (MakeServiceSubtype(longDiscriminatorSubtype, sizeof(longDiscriminatorSubtype),
+                               DiscoveryFilter(DiscoveryFilterType::kLong, params.GetLongDiscriminator())) == CHIP_NO_ERROR)
+        {
+            subTypes[subTypeSize++] = longDiscriminatorSubtype;
+        }
+        if (MakeServiceSubtype(commissioningModeSubType, sizeof(commissioningModeSubType),
+                               DiscoveryFilter(DiscoveryFilterType::kCommissioningMode, params.GetCommissioningMode() ? 1 : 0)) ==
+            CHIP_NO_ERROR)
+        {
+            subTypes[subTypeSize++] = commissioningModeSubType;
+        }
+        if (params.GetCommissioningMode() && params.GetOpenWindowCommissioningMode())
+        {
+            if (MakeServiceSubtype(openWindowSubType, sizeof(openWindowSubType),
+                                   DiscoveryFilter(DiscoveryFilterType::kCommissioningModeFromCommand, 1)) == CHIP_NO_ERROR)
+            {
+                subTypes[subTypeSize++] = openWindowSubType;
+            }
+        }
+    }
+
     if (params.GetVendorId().HasValue())
     {
-        snprintf(vendorSubType, sizeof(vendorSubType), "_V%u", params.GetVendorId().Value());
-        subTypes[subTypeSize++] = vendorSubType;
+        if (MakeServiceSubtype(vendorSubType, sizeof(vendorSubType),
+                               DiscoveryFilter(DiscoveryFilterType::kVendor, params.GetVendorId().Value())) == CHIP_NO_ERROR)
+        {
+            subTypes[subTypeSize++] = vendorSubType;
+        }
+    }
+    if (params.GetDeviceType().HasValue())
+    {
+        if (MakeServiceSubtype(deviceTypeSubType, sizeof(deviceTypeSubType),
+                               DiscoveryFilter(DiscoveryFilterType::kDeviceType, params.GetDeviceType().Value())) == CHIP_NO_ERROR)
+        {
+            subTypes[subTypeSize++] = deviceTypeSubType;
+        }
     }
 
     service.mTextEntries   = textEntries;
@@ -261,8 +290,42 @@ CHIP_ERROR DiscoveryImplPlatform::Advertise(const CommissionAdvertisingParameter
     service.mAddressType   = Inet::kIPAddressType_Any;
     error                  = ChipMdnsPublishService(&service);
 
+    if (error == CHIP_NO_ERROR)
+    {
+        if (params.GetCommissionAdvertiseMode() == CommssionAdvertiseMode::kCommissionableNode)
+        {
+            mCommissionableNodeAdvertisingParams = params;
+            mIsCommissionableNodePublishing      = true;
+        }
+        else
+        {
+            mCommissionerAdvertisingParams = params;
+            mIsCommissionerPublishing      = true;
+        }
+    }
+
+#ifdef DETAIL_LOGGING
+    PrintEntries(&service);
+#endif
     return error;
 }
+
+#ifdef DETAIL_LOGGING
+void DiscoveryImplPlatform::PrintEntries(const MdnsService * service)
+{
+    printf("printEntries port=%d, mTextEntrySize=%d, mSubTypeSize=%d\n", (int) (service->mPort), (int) (service->mTextEntrySize),
+           (int) (service->mSubTypeSize));
+    for (int i = 0; i < (int) service->mTextEntrySize; i++)
+    {
+        printf(" entry [%d] : %s %s\n", i, service->mTextEntries[i].mKey, (char *) (service->mTextEntries[i].mData));
+    }
+
+    for (int i = 0; i < (int) service->mSubTypeSize; i++)
+    {
+        printf(" type [%d] : %s\n", i, service->mSubTypes[i]);
+    }
+}
+#endif
 
 CHIP_ERROR DiscoveryImplPlatform::Advertise(const OperationalAdvertisingParameters & params)
 {
@@ -270,46 +333,177 @@ CHIP_ERROR DiscoveryImplPlatform::Advertise(const OperationalAdvertisingParamete
     CHIP_ERROR error = CHIP_NO_ERROR;
 
     mOperationalAdvertisingParams = params;
-    // TODO: There may be multilple device/fabrid ids after multi-admin.
+    // TODO: There may be multilple device/fabric ids after multi-admin.
 
-    ReturnErrorOnFailure(MakeInstanceName(service.mName, sizeof(service.mName), params.GetFabricId(), params.GetNodeId()));
-    strncpy(service.mType, "_chip", sizeof(service.mType));
+    // According to spec CRI and CRA intervals should not exceed 1 hour (3600000 ms).
+    // TODO: That value should be defined in the ReliableMessageProtocolConfig.h,
+    // but for now it is not possible to access it from src/lib/mdns. It should be
+    // refactored after creating common DNS-SD layer.
+    constexpr uint32_t kMaxMRPRetryInterval = 3600000;
+    // kMaxMRPRetryInterval max value is 3600000, what gives 7 characters and newline
+    // necessary to represent it in the text form.
+    constexpr uint8_t kMaxMRPRetryBufferSize = 7 + 1;
+    char mrpRetryIntervalIdleBuf[kMaxMRPRetryBufferSize];
+    char mrpRetryIntervalActiveBuf[kMaxMRPRetryBufferSize];
+    TextEntry mrpRetryIntervalEntries[OperationalAdvertisingParameters::kTxtMaxNumber];
+    size_t textEntrySize = 0;
+    uint32_t mrpRetryIntervalIdle, mrpRetryIntervalActive;
+    int writtenCharactersNumber;
+    params.GetMRPRetryIntervals(mrpRetryIntervalIdle, mrpRetryIntervalActive);
+
+    // TODO: Issue #5833 - MRP retry intervals should be updated on the poll period value
+    // change or device type change.
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+    if (chip::DeviceLayer::ConnectivityMgr().GetThreadDeviceType() ==
+        chip::DeviceLayer::ConnectivityManager::kThreadDeviceType_SleepyEndDevice)
+    {
+        uint32_t sedPollPeriod;
+        ReturnErrorOnFailure(chip::DeviceLayer::ThreadStackMgr().GetPollPeriod(sedPollPeriod));
+        // Increment default MRP retry intervals by SED poll period to be on the safe side
+        // and avoid unnecessary retransmissions.
+        mrpRetryIntervalIdle += sedPollPeriod;
+        mrpRetryIntervalActive += sedPollPeriod;
+    }
+#endif
+
+    if (mrpRetryIntervalIdle > kMaxMRPRetryInterval)
+    {
+        ChipLogProgress(Discovery, "MRP retry interval idle value exceeds allowed range of 1 hour, using maximum available");
+        mrpRetryIntervalIdle = kMaxMRPRetryInterval;
+    }
+    writtenCharactersNumber = snprintf(mrpRetryIntervalIdleBuf, sizeof(mrpRetryIntervalIdleBuf), "%" PRIu32, mrpRetryIntervalIdle);
+    VerifyOrReturnError((writtenCharactersNumber > 0) && (writtenCharactersNumber < kMaxMRPRetryBufferSize),
+                        CHIP_ERROR_INVALID_STRING_LENGTH);
+    mrpRetryIntervalEntries[textEntrySize++] = { "CRI", reinterpret_cast<const uint8_t *>(mrpRetryIntervalIdleBuf),
+                                                 strlen(mrpRetryIntervalIdleBuf) };
+
+    if (mrpRetryIntervalActive > kMaxMRPRetryInterval)
+    {
+        ChipLogProgress(Discovery, "MRP retry interval active value exceeds allowed range of 1 hour, using maximum available");
+        mrpRetryIntervalActive = kMaxMRPRetryInterval;
+    }
+    writtenCharactersNumber =
+        snprintf(mrpRetryIntervalActiveBuf, sizeof(mrpRetryIntervalActiveBuf), "%" PRIu32, mrpRetryIntervalActive);
+    VerifyOrReturnError((writtenCharactersNumber > 0) && (writtenCharactersNumber < kMaxMRPRetryBufferSize),
+                        CHIP_ERROR_INVALID_STRING_LENGTH);
+    mrpRetryIntervalEntries[textEntrySize++] = { "CRA", reinterpret_cast<const uint8_t *>(mrpRetryIntervalActiveBuf),
+                                                 strlen(mrpRetryIntervalActiveBuf) };
+
+    error = MakeHostName(service.mHostName, sizeof(service.mHostName), params.GetMac());
+    if (error != CHIP_NO_ERROR)
+    {
+        ChipLogError(Discovery, "Failed to create mdns hostname: %s", ErrorStr(error));
+        return error;
+    }
+    ReturnErrorOnFailure(MakeInstanceName(service.mName, sizeof(service.mName), params.GetPeerId()));
+    strncpy(service.mType, kOperationalServiceName, sizeof(service.mType));
     service.mProtocol      = MdnsServiceProtocol::kMdnsProtocolTcp;
     service.mPort          = CHIP_PORT;
-    service.mTextEntries   = nullptr;
-    service.mTextEntrySize = 0;
+    service.mTextEntries   = mrpRetryIntervalEntries;
+    service.mTextEntrySize = textEntrySize;
     service.mInterface     = INET_NULL_INTERFACEID;
     service.mAddressType   = Inet::kIPAddressType_Any;
+    service.mSubTypeSize   = 0;
     error                  = ChipMdnsPublishService(&service);
+
+    if (error == CHIP_NO_ERROR)
+    {
+        mIsOperationalPublishing = true;
+    }
 
     return error;
 }
 
 CHIP_ERROR DiscoveryImplPlatform::StopPublishDevice()
 {
-    mIsOperationalPublishing  = false;
-    mIsCommissionalPublishing = false;
-    return ChipMdnsStopPublish();
+    CHIP_ERROR error = ChipMdnsStopPublish();
+
+    if (error == CHIP_NO_ERROR)
+    {
+        mIsOperationalPublishing        = false;
+        mIsCommissionableNodePublishing = false;
+        mIsCommissionerPublishing       = false;
+    }
+    return error;
 }
 
 CHIP_ERROR DiscoveryImplPlatform::SetResolverDelegate(ResolverDelegate * delegate)
 {
-    VerifyOrReturnError(delegate == nullptr || mResolverDelegate == nullptr, CHIP_ERROR_INCORRECT_STATE);
     mResolverDelegate = delegate;
     return CHIP_NO_ERROR;
 }
 
-CHIP_ERROR DiscoveryImplPlatform::ResolveNodeId(uint64_t nodeId, uint64_t fabricId, Inet::IPAddressType type)
+CHIP_ERROR DiscoveryImplPlatform::ResolveNodeId(const PeerId & peerId, Inet::IPAddressType type)
 {
     ReturnErrorOnFailure(Init());
 
     MdnsService service;
 
-    ReturnErrorOnFailure(MakeInstanceName(service.mName, sizeof(service.mName), fabricId, nodeId));
-    strncpy(service.mType, "_chip", sizeof(service.mType));
+    ReturnErrorOnFailure(MakeInstanceName(service.mName, sizeof(service.mName), peerId));
+    strncpy(service.mType, kOperationalServiceName, sizeof(service.mType));
     service.mProtocol    = MdnsServiceProtocol::kMdnsProtocolTcp;
     service.mAddressType = type;
     return ChipMdnsResolve(&service, INET_NULL_INTERFACEID, HandleNodeIdResolve, this);
+}
+
+void DiscoveryImplPlatform::HandleNodeBrowse(void * context, MdnsService * services, size_t servicesSize, CHIP_ERROR error)
+{
+    for (size_t i = 0; i < servicesSize; ++i)
+    {
+        // For some platforms browsed services are already resolved, so verify if resolve is really needed or call resolve callback
+        if (!services[i].mAddress.HasValue())
+        {
+            ChipMdnsResolve(&services[i], services[i].mInterface, HandleNodeResolve, context);
+        }
+        else
+        {
+            HandleNodeResolve(context, &services[i], error);
+        }
+    }
+}
+
+void DiscoveryImplPlatform::HandleNodeResolve(void * context, MdnsService * result, CHIP_ERROR error)
+{
+    if (error != CHIP_NO_ERROR)
+    {
+        return;
+    }
+    DiscoveryImplPlatform * mgr = static_cast<DiscoveryImplPlatform *>(context);
+    DiscoveredNodeData data;
+    Platform::CopyString(data.hostName, result->mHostName);
+
+    if (result->mAddress.HasValue())
+    {
+        data.ipAddress[data.numIPs++] = result->mAddress.Value();
+    }
+
+    for (size_t i = 0; i < result->mTextEntrySize; ++i)
+    {
+        ByteSpan key(reinterpret_cast<const uint8_t *>(result->mTextEntries[i].mKey), strlen(result->mTextEntries[i].mKey));
+        ByteSpan val(result->mTextEntries[i].mData, result->mTextEntries[i].mDataSize);
+        FillNodeDataFromTxt(key, val, data);
+    }
+    mgr->mResolverDelegate->OnNodeDiscoveryComplete(data);
+}
+
+CHIP_ERROR DiscoveryImplPlatform::FindCommissionableNodes(DiscoveryFilter filter)
+{
+    ReturnErrorOnFailure(Init());
+    char serviceName[kMaxCommisisonableServiceNameSize];
+    ReturnErrorOnFailure(MakeServiceTypeName(serviceName, sizeof(serviceName), filter, DiscoveryType::kCommissionableNode));
+
+    return ChipMdnsBrowse(serviceName, MdnsServiceProtocol::kMdnsProtocolUdp, Inet::kIPAddressType_Any, INET_NULL_INTERFACEID,
+                          HandleNodeBrowse, this);
+}
+
+CHIP_ERROR DiscoveryImplPlatform::FindCommissioners(DiscoveryFilter filter)
+{
+    ReturnErrorOnFailure(Init());
+    char serviceName[kMaxCommisisonerServiceNameSize];
+    ReturnErrorOnFailure(MakeServiceTypeName(serviceName, sizeof(serviceName), filter, DiscoveryType::kCommissionerNode));
+
+    return ChipMdnsBrowse(serviceName, MdnsServiceProtocol::kMdnsProtocolUdp, Inet::kIPAddressType_Any, INET_NULL_INTERFACEID,
+                          HandleNodeBrowse, this);
 }
 
 void DiscoveryImplPlatform::HandleNodeIdResolve(void * context, MdnsService * result, CHIP_ERROR error)
@@ -324,58 +518,41 @@ void DiscoveryImplPlatform::HandleNodeIdResolve(void * context, MdnsService * re
     if (error != CHIP_NO_ERROR)
     {
         ChipLogError(Discovery, "Node ID resolved failed with %s", chip::ErrorStr(error));
-        mgr->mResolverDelegate->OnNodeIdResolutionFailed(kUndefinedNodeId, error);
+        mgr->mResolverDelegate->OnNodeIdResolutionFailed(PeerId(), error);
         return;
     }
 
     if (result == nullptr)
     {
         ChipLogError(Discovery, "Node ID resolve not found");
-        mgr->mResolverDelegate->OnNodeIdResolutionFailed(kUndefinedNodeId, CHIP_ERROR_UNKNOWN_RESOURCE_ID);
+        mgr->mResolverDelegate->OnNodeIdResolutionFailed(PeerId(), CHIP_ERROR_UNKNOWN_RESOURCE_ID);
         return;
     }
 
-    // Parse '%x-%x' from the name
-    uint64_t nodeId       = 0;
-    bool deliminatorFound = false;
+    ResolvedNodeData nodeData;
 
-    for (size_t i = 0; i < sizeof(result->mName) && result->mName[i] != 0; i++)
+    error = ExtractIdFromInstanceName(result->mName, &nodeData.mPeerId);
+    if (error != CHIP_NO_ERROR)
     {
-        if (result->mName[i] == '-')
-        {
-            deliminatorFound = true;
-            break;
-        }
-        else
-        {
-            uint8_t val = HexToInt(result->mName[i]);
-
-            if (val == UINT8_MAX)
-            {
-                break;
-            }
-            else
-            {
-                nodeId = nodeId * 16 + val;
-            }
-        }
+        ChipLogError(Discovery, "Node ID resolved failed with %s", chip::ErrorStr(error));
+        mgr->mResolverDelegate->OnNodeIdResolutionFailed(PeerId(), error);
+        return;
     }
 
-    ResolvedNodeData nodeData;
+    Platform::CopyString(nodeData.mHostName, result->mHostName);
     nodeData.mInterfaceId = result->mInterface;
     nodeData.mAddress     = result->mAddress.ValueOr({});
     nodeData.mPort        = result->mPort;
 
-    if (deliminatorFound)
+    for (size_t i = 0; i < result->mTextEntrySize; ++i)
     {
-        ChipLogProgress(Discovery, "Node ID resolved for %" PRIX64, nodeId);
-        mgr->mResolverDelegate->OnNodeIdResolved(nodeId, nodeData);
+        ByteSpan key(reinterpret_cast<const uint8_t *>(result->mTextEntries[i].mKey), strlen(result->mTextEntries[i].mKey));
+        ByteSpan val(result->mTextEntries[i].mData, result->mTextEntries[i].mDataSize);
+        FillNodeDataFromTxt(key, val, nodeData);
     }
-    else
-    {
-        ChipLogProgress(Discovery, "Invalid service entry from node %" PRIX64, nodeId);
-        mgr->mResolverDelegate->OnNodeIdResolved(kUndefinedNodeId, nodeData);
-    }
+
+    nodeData.LogNodeIdResolved();
+    mgr->mResolverDelegate->OnNodeIdResolved(nodeData);
 }
 
 DiscoveryImplPlatform & DiscoveryImplPlatform::GetInstance()

@@ -43,12 +43,12 @@
 #include <lwip/raw.h>
 #include <lwip/tcpip.h>
 #if CHIP_HAVE_CONFIG_H
-#include <lwip/lwip_buildconfig.h>
-#endif // CHIP_HAVE_CONFIG_H
-#endif // CHIP_SYSTEM_CONFIG_USE_LWIP
+#include <lwip/lwip_buildconfig.h> // nogncheck
+#endif                             // CHIP_HAVE_CONFIG_H
+#endif                             // CHIP_SYSTEM_CONFIG_USE_LWIP
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
-#include <sys/select.h>
+#include <system/WatchableSocket.h>
 #if HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
 #endif // HAVE_SYS_SOCKET_H
@@ -86,9 +86,9 @@ chip::System::ObjectPool<RawEndPoint, INET_CONFIG_NUM_RAW_ENDPOINTS> RawEndPoint
  *   udp_bind_netif(aUDP, intfId);
  *
  */
-static INET_ERROR LwIPBindInterface(struct raw_pcb * aRaw, InterfaceId intfId)
+static CHIP_ERROR LwIPBindInterface(struct raw_pcb * aRaw, InterfaceId intfId)
 {
-    INET_ERROR res = INET_NO_ERROR;
+    CHIP_ERROR res = CHIP_NO_ERROR;
 
 #if HAVE_LWIP_RAW_BIND_NETIF
     if (!IsInterfaceIdPresent(intfId))
@@ -127,9 +127,9 @@ static INET_ERROR LwIPBindInterface(struct raw_pcb * aRaw, InterfaceId intfId)
  * @param[in]   addr        the IP address (must be an interface address)
  * @param[in]   intfId      an optional network interface indicator
  *
- * @retval  INET_NO_ERROR               success: endpoint bound to address
- * @retval  INET_ERROR_INCORRECT_STATE  endpoint has been bound previously
- * @retval  INET_NO_MEMORY              insufficient memory for endpoint
+ * @retval  CHIP_NO_ERROR               success: endpoint bound to address
+ * @retval  CHIP_ERROR_INCORRECT_STATE  endpoint has been bound previously
+ * @retval  CHIP_ERROR_NO_MEMORY        insufficient memory for endpoint
  *
  * @retval  INET_ERROR_UNKNOWN_INTERFACE
  *      On some platforms, the optionally specified interface is not
@@ -150,20 +150,16 @@ static INET_ERROR LwIPBindInterface(struct raw_pcb * aRaw, InterfaceId intfId)
  *  On LwIP, this method must not be called with the LwIP stack lock
  *  already acquired.
  */
-INET_ERROR RawEndPoint::Bind(IPAddressType addrType, const IPAddress & addr, InterfaceId intfId)
+CHIP_ERROR RawEndPoint::Bind(IPAddressType addrType, const IPAddress & addr, InterfaceId intfId)
 {
-    INET_ERROR res = INET_NO_ERROR;
-
     if (mState != kState_Ready && mState != kState_Bound)
     {
-        res = INET_ERROR_INCORRECT_STATE;
-        goto exit;
+        return CHIP_ERROR_INCORRECT_STATE;
     }
 
     if ((addr != IPAddress::Any) && (addr.Type() != kIPAddressType_Any) && (addr.Type() != addrType))
     {
-        res = INET_ERROR_WRONG_ADDRESS_TYPE;
-        goto exit;
+        return INET_ERROR_WRONG_ADDRESS_TYPE;
     }
 
 #if CHIP_SYSTEM_CONFIG_USE_LWIP
@@ -172,10 +168,10 @@ INET_ERROR RawEndPoint::Bind(IPAddressType addrType, const IPAddress & addr, Int
     LOCK_TCPIP_CORE();
 
     // Make sure we have the appropriate type of PCB.
-    res = GetPCB(addrType);
+    CHIP_ERROR res = GetPCB(addrType);
 
     // Bind the PCB to the specified address.
-    if (res == INET_NO_ERROR)
+    if (res == CHIP_NO_ERROR)
     {
 #if LWIP_VERSION_MAJOR > 1 || LWIP_VERSION_MINOR >= 5
         ip_addr_t ipAddr = addr.ToLwIPAddr();
@@ -202,7 +198,7 @@ INET_ERROR RawEndPoint::Bind(IPAddressType addrType, const IPAddress & addr, Int
 #endif // LWIP_VERSION_MAJOR <= 1 || LWIP_VERSION_MINOR >= 5
     }
 
-    if (res == INET_NO_ERROR)
+    if (res == CHIP_NO_ERROR)
     {
         res = LwIPBindInterface(mRaw, intfId);
     }
@@ -210,28 +206,39 @@ INET_ERROR RawEndPoint::Bind(IPAddressType addrType, const IPAddress & addr, Int
     // Unlock LwIP stack
     UNLOCK_TCPIP_CORE();
 
-    SuccessOrExit(res);
+    ReturnErrorOnFailure(res);
 
 #endif // CHIP_SYSTEM_CONFIG_USE_LWIP
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
     // Make sure we have the appropriate type of socket.
-    res = GetSocket(addrType);
-    SuccessOrExit(res);
+    ReturnErrorOnFailure(GetSocket(addrType));
+    ReturnErrorOnFailure(IPEndPointBasis::Bind(addrType, addr, 0, intfId));
 
-    res = IPEndPointBasis::Bind(addrType, addr, 0, intfId);
-    SuccessOrExit(res);
+#if CHIP_SYSTEM_CONFIG_USE_DISPATCH
+    dispatch_queue_t dispatchQueue = SystemLayer().WatchableEventsManager().GetDispatchQueue();
+    if (dispatchQueue != nullptr)
+    {
+        unsigned long fd = static_cast<unsigned long>(mSocket.GetFD());
+
+        mReadableSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0, dispatchQueue);
+        ReturnErrorCodeIf(mReadableSource == nullptr, CHIP_ERROR_NO_MEMORY);
+
+        dispatch_source_set_event_handler(mReadableSource, ^{
+            this->mSocket.SetPendingIO(System::SocketEventFlags::kRead);
+            this->HandlePendingIO();
+        });
+
+        dispatch_resume(mReadableSource);
+    }
+#endif // CHIP_SYSTEM_CONFIG_USE_DISPATCH
 
     mBoundIntfId = intfId;
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-    if (res == INET_NO_ERROR)
-    {
-        mState = kState_Bound;
-    }
+    mState = kState_Bound;
 
-exit:
-    return res;
+    return CHIP_NO_ERROR;
 }
 
 /**
@@ -242,9 +249,9 @@ exit:
  * @param[in]   intfId  An InterfaceId to identify the scope of the address.
  * @param[in]   addr    An IPv6 link-local scope IPAddress object.
  *
- * @retval  INET_NO_ERROR               success: endpoint bound to address
- * @retval  INET_ERROR_INCORRECT_STATE  endpoint has been bound previously
- * @retval  INET_NO_MEMORY              insufficient memory for endpoint
+ * @retval  CHIP_NO_ERROR               success: endpoint bound to address
+ * @retval  CHIP_ERROR_INCORRECT_STATE  endpoint has been bound previously
+ * @retval  CHIP_ERROR_NO_MEMORY        insufficient memory for endpoint
  *
  * @retval  INET_ERROR_WRONG_PROTOCOL_TYPE
  *      \c addrType does not match \c IPVer.
@@ -262,9 +269,9 @@ exit:
  *  On LwIP, this method must not be called with the LwIP stack lock
  *  already acquired.
  */
-INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & addr)
+CHIP_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & addr)
 {
-    INET_ERROR res = INET_NO_ERROR;
+    CHIP_ERROR res = CHIP_NO_ERROR;
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
     const int lIfIndex = static_cast<int>(intfId);
@@ -272,7 +279,7 @@ INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & 
 
     if (mState != kState_Ready && mState != kState_Bound)
     {
-        res = INET_ERROR_INCORRECT_STATE;
+        res = CHIP_ERROR_INCORRECT_STATE;
         goto ret;
     }
 
@@ -291,7 +298,7 @@ INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & 
     res = GetPCB(addr.Type());
 
     // Bind the PCB to the specified address.
-    if (res == INET_NO_ERROR)
+    if (res == CHIP_NO_ERROR)
     {
 #if LWIP_VERSION_MAJOR > 1
         ip_addr_t ipAddr = addr.ToLwIPAddr();
@@ -301,7 +308,7 @@ INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & 
         res                 = chip::System::MapErrorLwIP(raw_bind_ip6(mRaw, &ipv6Addr));
 #endif // LWIP_VERSION_MAJOR <= 1
 
-        if (res != INET_NO_ERROR)
+        if (res != CHIP_NO_ERROR)
         {
             raw_remove(mRaw);
             mRaw              = NULL;
@@ -320,22 +327,22 @@ INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & 
 
     // Make sure we have the appropriate type of socket.
     res = GetSocket(kIPAddressType_IPv6);
-    if (res != INET_NO_ERROR)
+    if (res != CHIP_NO_ERROR)
     {
         goto ret;
     }
 
-    if (::setsockopt(mSocket, IPPROTO_IPV6, IPV6_MULTICAST_IF, &lIfIndex, sizeof(lIfIndex)) != 0)
+    if (::setsockopt(mSocket.GetFD(), IPPROTO_IPV6, IPV6_MULTICAST_IF, &lIfIndex, sizeof(lIfIndex)) != 0)
     {
         goto optfail;
     }
 
-    if (::setsockopt(mSocket, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &sInt255, sizeof(sInt255)) != 0)
+    if (::setsockopt(mSocket.GetFD(), IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &sInt255, sizeof(sInt255)) != 0)
     {
         goto optfail;
     }
 
-    if (::setsockopt(mSocket, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &sInt255, sizeof(sInt255)) != 0)
+    if (::setsockopt(mSocket.GetFD(), IPPROTO_IPV6, IPV6_UNICAST_HOPS, &sInt255, sizeof(sInt255)) != 0)
     {
         goto optfail;
     }
@@ -345,14 +352,13 @@ INET_ERROR RawEndPoint::BindIPv6LinkLocal(InterfaceId intfId, const IPAddress & 
 
 optfail:
     res = chip::System::MapErrorPOSIX(errno);
-    ::close(mSocket);
-    mSocket   = INET_INVALID_SOCKET_FD;
+    mSocket.Close();
     mAddrType = kIPAddressType_Unknown;
 
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
 ret:
-    if (res == INET_NO_ERROR)
+    if (res == CHIP_NO_ERROR)
     {
         mState = kState_Bound;
     }
@@ -363,7 +369,11 @@ ret:
 /**
  * @brief   Prepare the endpoint to receive ICMP messages.
  *
- * @retval  INET_NO_ERROR   always returned.
+ * @param[in]  onMessageReceived   The endpoint's message reception event handling function delegate.
+ * @param[in]  onReceiveError      The endpoint's receive error event handling function delegate.
+ * @param[in]  appState            Application state pointer.
+ *
+ * @retval  CHIP_NO_ERROR   always returned.
  *
  * @details
  *  If \c mState is already \c kState_Listening, then no operation is
@@ -374,25 +384,22 @@ ret:
  *  On LwIP, this method must not be called with the LwIP stack lock
  *  already acquired
  */
-INET_ERROR RawEndPoint::Listen()
+CHIP_ERROR RawEndPoint::Listen(IPEndPointBasis::OnMessageReceivedFunct onMessageReceived,
+                               IPEndPointBasis::OnReceiveErrorFunct onReceiveError, void * appState)
 {
-    INET_ERROR res = INET_NO_ERROR;
-
-#if CHIP_SYSTEM_CONFIG_USE_SOCKETS
-    chip::System::Layer & lSystemLayer = SystemLayer();
-#endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
-
     if (mState == kState_Listening)
     {
-        res = INET_NO_ERROR;
-        goto exit;
+        return CHIP_NO_ERROR;
     }
 
     if (mState != kState_Bound)
     {
-        res = INET_ERROR_INCORRECT_STATE;
-        goto exit;
+        return CHIP_ERROR_INCORRECT_STATE;
     }
+
+    OnMessageReceived = onMessageReceived;
+    OnReceiveError    = onReceiveError;
+    AppState          = appState;
 
 #if CHIP_SYSTEM_CONFIG_USE_LWIP
 
@@ -413,20 +420,15 @@ INET_ERROR RawEndPoint::Listen()
 
 #endif // CHIP_SYSTEM_CONFIG_USE_LWIP
 
+    mState = kState_Listening;
+
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
-
-    // Wake the thread calling select so that it starts selecting on the new socket.
-    lSystemLayer.WakeSelect();
-
+    // Wait for ability to read on this endpoint.
+    mSocket.SetCallback(HandlePendingIO, reinterpret_cast<intptr_t>(this));
+    ReturnErrorOnFailure(mSocket.RequestCallbackOnPendingRead());
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-    if (res == INET_NO_ERROR)
-    {
-        mState = kState_Listening;
-    }
-
-exit:
-    return res;
+    return CHIP_NO_ERROR;
 }
 
 /**
@@ -464,20 +466,21 @@ void RawEndPoint::Close()
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-        if (mSocket != INET_INVALID_SOCKET_FD)
+        if (mSocket.HasFD())
         {
-            chip::System::Layer & lSystemLayer = SystemLayer();
-
-            // Wake the thread calling select so that it recognizes the socket is closed.
-            lSystemLayer.WakeSelect();
-
-            close(mSocket);
-            mSocket = INET_INVALID_SOCKET_FD;
+            mSocket.Close();
         }
 
         // Clear any results from select() that indicate pending I/O for the socket.
-        mPendingIO.Clear();
+        mSocket.ClearPendingIO();
 
+#if CHIP_SYSTEM_CONFIG_USE_DISPATCH
+        if (mReadableSource)
+        {
+            dispatch_source_cancel(mReadableSource);
+            dispatch_release(mReadableSource);
+        }
+#endif // CHIP_SYSTEM_CONFIG_USE_DISPATCH
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
         mState = kState_Closed;
@@ -510,7 +513,7 @@ void RawEndPoint::Free()
  *  A synonym for <tt>SendTo(addr, INET_NULL_INTERFACEID, msg,
  *  sendFlags)</tt>.
  */
-INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, chip::System::PacketBufferHandle && msg, uint16_t sendFlags)
+CHIP_ERROR RawEndPoint::SendTo(const IPAddress & addr, chip::System::PacketBufferHandle && msg, uint16_t sendFlags)
 {
     return SendTo(addr, INET_NULL_INTERFACEID, std::move(msg), sendFlags);
 }
@@ -523,20 +526,20 @@ INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, chip::System::PacketBuffe
  * @param[in]   msg         the packet buffer containing the UDP message
  * @param[in]   sendFlags   optional transmit option flags
  *
- * @retval  INET_NO_ERROR
+ * @retval  CHIP_NO_ERROR
  *      success: \c msg is queued for transmit.
  *
- * @retval  INET_ERROR_NOT_SUPPORTED
+ * @retval  CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE
  *      the system does not support the requested operation.
  *
  * @retval  INET_ERROR_WRONG_ADDRESS_TYPE
  *      the destination address and the bound interface address do not
  *      have matching protocol versions or address type.
  *
- * @retval  INET_ERROR_MESSAGE_TOO_LONG
+ * @retval  CHIP_ERROR_MESSAGE_TOO_LONG
  *      \c msg does not contain the whole ICMP message.
  *
- * @retval  INET_ERROR_OUTBOUND_MESSAGE_TRUNCATED
+ * @retval  CHIP_ERROR_OUTBOUND_MESSAGE_TOO_BIG
  *      On some platforms, only a truncated portion of \c msg was queued
  *      for transmit.
  *
@@ -545,7 +548,7 @@ INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, chip::System::PacketBuffe
  * @details
  *      Send the ICMP message in \c msg to the destination given in \c addr.
  */
-INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, InterfaceId intfId, chip::System::PacketBufferHandle && msg,
+CHIP_ERROR RawEndPoint::SendTo(const IPAddress & addr, InterfaceId intfId, chip::System::PacketBufferHandle && msg,
                                uint16_t sendFlags)
 {
     IPPacketInfo pktInfo;
@@ -562,20 +565,20 @@ INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, InterfaceId intfId, chip:
  * @param[in]   msg         the packet buffer containing the UDP message
  * @param[in]   sendFlags   optional transmit option flags
  *
- * @retval  INET_NO_ERROR
+ * @retval  CHIP_NO_ERROR
  *      success: \c msg is queued for transmit.
  *
- * @retval  INET_ERROR_NOT_SUPPORTED
+ * @retval  CHIP_ERROR_UNSUPPORTED_CHIP_FEATURE
  *      the system does not support the requested operation.
  *
  * @retval  INET_ERROR_WRONG_ADDRESS_TYPE
  *      the destination address and the bound interface address do not
  *      have matching protocol versions or address type.
  *
- * @retval  INET_ERROR_MESSAGE_TOO_LONG
+ * @retval  CHIP_ERROR_MESSAGE_TOO_LONG
  *      \c msg does not contain the whole ICMP message.
  *
- * @retval  INET_ERROR_OUTBOUND_MESSAGE_TRUNCATED
+ * @retval  CHIP_ERROR_OUTBOUND_MESSAGE_TOO_BIG
  *      On some platforms, only a truncated portion of \c msg was queued
  *      for transmit.
  *
@@ -584,13 +587,13 @@ INET_ERROR RawEndPoint::SendTo(const IPAddress & addr, InterfaceId intfId, chip:
  * @details
  *      Send the ICMP message \c msg using the destination information given in \c addr.
  */
-INET_ERROR RawEndPoint::SendMsg(const IPPacketInfo * pktInfo, chip::System::PacketBufferHandle msg, uint16_t sendFlags)
+CHIP_ERROR RawEndPoint::SendMsg(const IPPacketInfo * pktInfo, chip::System::PacketBufferHandle && msg, uint16_t sendFlags)
 {
-    INET_ERROR res         = INET_NO_ERROR;
+    CHIP_ERROR res         = CHIP_NO_ERROR;
     const IPAddress & addr = pktInfo->DestAddress;
 
     INET_FAULT_INJECT(FaultInjection::kFault_Send, return INET_ERROR_UNKNOWN_INTERFACE;);
-    INET_FAULT_INJECT(FaultInjection::kFault_SendNonCritical, return INET_ERROR_NO_MEMORY;);
+    INET_FAULT_INJECT(FaultInjection::kFault_SendNonCritical, return CHIP_ERROR_NO_MEMORY;);
 
     // Do not allow sending an IPv4 address on an IPv6 end point and
     // vice versa.
@@ -670,8 +673,8 @@ exit:
  * @param[in]   numICMPTypes    length of array at \c aICMPTypes
  * @param[in]   aICMPTypes      the set of ICMPv6 type codes to filter.
  *
- * @retval  INET_NO_ERROR                   success: filter parameters set
- * @retval  INET_ERROR_NOT_IMPLEMENTED      system does not implement
+ * @retval  CHIP_NO_ERROR                   success: filter parameters set
+ * @retval  CHIP_ERROR_NOT_IMPLEMENTED      system does not implement
  * @retval  INET_ERROR_WRONG_ADDRESS_TYPE   endpoint not IPv6 type
  * @retval  INET_ERROR_WRONG_PROTOCOL_TYPE  endpoint not ICMP6 type
  *
@@ -681,23 +684,18 @@ exit:
  *  Apply the ICMPv6 filtering parameters for the codes in \c aICMPTypes to
  *  the underlying endpoint in the system networking stack.
  */
-INET_ERROR RawEndPoint::SetICMPFilter(uint8_t numICMPTypes, const uint8_t * aICMPTypes)
+CHIP_ERROR RawEndPoint::SetICMPFilter(uint8_t numICMPTypes, const uint8_t * aICMPTypes)
 {
-    INET_ERROR err;
-
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
 #if !(HAVE_NETINET_ICMP6_H && HAVE_ICMP6_FILTER)
-    err = INET_ERROR_NOT_IMPLEMENTED;
-    ExitNow();
+    return CHIP_ERROR_NOT_IMPLEMENTED;
 #endif //!(HAVE_NETINET_ICMP6_H && HAVE_ICMP6_FILTER)
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-    VerifyOrExit(IPVer == kIPVersion_6, err = INET_ERROR_WRONG_ADDRESS_TYPE);
-    VerifyOrExit(IPProto == kIPProtocol_ICMPv6, err = INET_ERROR_WRONG_PROTOCOL_TYPE);
-    VerifyOrExit((numICMPTypes == 0 && aICMPTypes == nullptr) || (numICMPTypes != 0 && aICMPTypes != nullptr),
-                 err = INET_ERROR_BAD_ARGS);
-
-    err = INET_NO_ERROR;
+    VerifyOrReturnError(IPVer == kIPVersion_6, INET_ERROR_WRONG_ADDRESS_TYPE);
+    VerifyOrReturnError(IPProto == kIPProtocol_ICMPv6, INET_ERROR_WRONG_PROTOCOL_TYPE);
+    VerifyOrReturnError((numICMPTypes == 0 && aICMPTypes == nullptr) || (numICMPTypes != 0 && aICMPTypes != nullptr),
+                        CHIP_ERROR_INVALID_ARGUMENT);
 
 #if CHIP_SYSTEM_CONFIG_USE_LWIP
     LOCK_TCPIP_CORE();
@@ -721,15 +719,14 @@ INET_ERROR RawEndPoint::SetICMPFilter(uint8_t numICMPTypes, const uint8_t * aICM
     {
         ICMP6_FILTER_SETPASSALL(&filter);
     }
-    if (setsockopt(mSocket, IPPROTO_ICMPV6, ICMP6_FILTER, &filter, sizeof(filter)) == -1)
+    if (setsockopt(mSocket.GetFD(), IPPROTO_ICMPV6, ICMP6_FILTER, &filter, sizeof(filter)) == -1)
     {
-        err = chip::System::MapErrorPOSIX(errno);
+        return chip::System::MapErrorPOSIX(errno);
     }
 #endif // HAVE_NETINET_ICMP6_H && HAVE_ICMP6_FILTER
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-exit:
-    return err;
+    return CHIP_NO_ERROR;
 }
 
 /**
@@ -739,9 +736,9 @@ exit:
  *
  * @param[in]   intfId      indicator of the network interface.
  *
- * @retval  INET_NO_ERROR               success: endpoint bound to address
- * @retval  INET_NO_MEMORY              insufficient memory for endpoint
- * @retval  INET_ERROR_NOT_IMPLEMENTED  system implementation not complete.
+ * @retval  CHIP_NO_ERROR               success: endpoint bound to address
+ * @retval  CHIP_ERROR_NO_MEMORY        insufficient memory for endpoint
+ * @retval  CHIP_ERROR_NOT_IMPLEMENTED  system implementation not complete.
  *
  * @retval  INET_ERROR_UNKNOWN_INTERFACE
  *      On some platforms, the interface is not present.
@@ -754,48 +751,43 @@ exit:
  *  On LwIP, this method must not be called with the LwIP stack lock
  *  already acquired.
  */
-INET_ERROR RawEndPoint::BindInterface(IPAddressType addrType, InterfaceId intfId)
+CHIP_ERROR RawEndPoint::BindInterface(IPAddressType addrType, InterfaceId intfId)
 {
-    INET_ERROR err = INET_NO_ERROR;
-
     // A lock is required because the LwIP thread may be referring to intf_filter,
     // while this code running in the Inet application is potentially modifying it.
     // NOTE: this only supports LwIP interfaces whose number is no bigger than 9.
 
     if (mState != kState_Ready && mState != kState_Bound)
-        return INET_ERROR_INCORRECT_STATE;
+    {
+        return CHIP_ERROR_INCORRECT_STATE;
+    }
 
 #if CHIP_SYSTEM_CONFIG_USE_LWIP
     LOCK_TCPIP_CORE();
 
     // Make sure we have the appropriate type of PCB.
-    err = GetPCB(addrType);
-    SuccessOrExit(err);
+    CHIP_ERROR err = GetPCB(addrType);
 
-    err = LwIPBindInterface(mRaw, intfId);
+    if (err == CHIP_NO_ERROR)
+    {
+        err = LwIPBindInterface(mRaw, intfId);
+    }
 
     UNLOCK_TCPIP_CORE();
 
-    SuccessOrExit(err);
+    ReturnErrorOnFailure(err);
 
 #endif // CHIP_SYSTEM_CONFIG_USE_LWIP
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
     // Make sure we have the appropriate type of socket.
-    err = GetSocket(addrType);
-    SuccessOrExit(err);
-
-    err = IPEndPointBasis::BindInterface(addrType, intfId);
-    SuccessOrExit(err);
+    ReturnErrorOnFailure(GetSocket(addrType));
+    ReturnErrorOnFailure(IPEndPointBasis::BindInterface(addrType, intfId));
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS
 
-    if (err == INET_NO_ERROR)
-    {
-        mState = kState_Bound;
-    }
+    mState = kState_Bound;
 
-exit:
-    return err;
+    return CHIP_NO_ERROR;
 }
 
 void RawEndPoint::Init(InetLayer * inetLayer, IPVersion ipVer, IPProtocol ipProto)
@@ -833,14 +825,12 @@ void RawEndPoint::HandleDataReceived(System::PacketBufferHandle && msg)
     IPEndPointBasis::HandleDataReceived(std::move(msg));
 }
 
-INET_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
+CHIP_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
 {
-    INET_ERROR lRetval = INET_NO_ERROR;
-
     // IMPORTANT: This method MUST be called with the LwIP stack LOCKED!
 
 #if LWIP_VERSION_MAJOR > 1 || LWIP_VERSION_MINOR >= 5
-    if (mRaw == NULL)
+    if (mRaw == nullptr)
     {
         switch (addrType)
         {
@@ -852,20 +842,16 @@ INET_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
             break;
 
         default:
-            lRetval = INET_ERROR_WRONG_ADDRESS_TYPE;
-            goto exit;
+            return INET_ERROR_WRONG_ADDRESS_TYPE;
         }
 
         if (mRaw == NULL)
         {
             ChipLogError(Inet, "raw_new_ip_type failed");
-            lRetval = INET_ERROR_NO_MEMORY;
-            goto exit;
+            return CHIP_ERROR_NO_MEMORY;
         }
-        else
-        {
-            mLwIPEndPointType = kLwIPEndPointType_Raw;
-        }
+
+        mLwIPEndPointType = kLwIPEndPointType_Raw;
     }
     else
     {
@@ -874,12 +860,12 @@ INET_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
         switch (lLwIPAddrType)
         {
         case IPADDR_TYPE_V6:
-            VerifyOrExit(addrType == kIPAddressType_IPv6, lRetval = INET_ERROR_WRONG_ADDRESS_TYPE);
+            VerifyOrReturnError(addrType == kIPAddressType_IPv6, INET_ERROR_WRONG_ADDRESS_TYPE);
             break;
 
 #if INET_CONFIG_ENABLE_IPV4
         case IPADDR_TYPE_V4:
-            VerifyOrExit(addrType == kIPAddressType_IPv4, lRetval = INET_ERROR_WRONG_ADDRESS_TYPE);
+            VerifyOrReturnError(addrType == kIPAddressType_IPv4, INET_ERROR_WRONG_ADDRESS_TYPE);
             break;
 #endif // INET_CONFIG_ENABLE_IPV4
 
@@ -904,20 +890,16 @@ INET_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
 #endif // INET_CONFIG_ENABLE_IPV4
         else
         {
-            lRetval = INET_ERROR_WRONG_ADDRESS_TYPE;
-            goto exit;
+            return INET_ERROR_WRONG_ADDRESS_TYPE;
         }
 
         if (mRaw == NULL)
         {
             ChipLogError(Inet, "raw_new failed");
-            lRetval = INET_ERROR_NO_MEMORY;
-            goto exit;
+            return CHIP_ERROR_NO_MEMORY;
         }
-        else
-        {
-            mLwIPEndPointType = kLwIPEndPointType_Raw;
-        }
+
+        mLwIPEndPointType = kLwIPEndPointType_Raw;
     }
     else
     {
@@ -929,14 +911,12 @@ INET_ERROR RawEndPoint::GetPCB(IPAddressType addrType)
 
         if (addrType != pcbType)
         {
-            lRetval = INET_ERROR_WRONG_ADDRESS_TYPE;
-            goto exit;
+            return INET_ERROR_WRONG_ADDRESS_TYPE;
         }
     }
 #endif // LWIP_VERSION_MAJOR <= 1 || LWIP_VERSION_MINOR >= 5
 
-exit:
-    return (lRetval);
+    return CHIP_NO_ERROR;
 }
 
 /* This function is executed when a raw_pcb is listening and an IP datagram (v4 or v6) is received.
@@ -1019,10 +999,9 @@ u8_t RawEndPoint::LwIPReceiveRawMessage(void * arg, struct raw_pcb * pcb, struct
 #endif // CHIP_SYSTEM_CONFIG_USE_LWIP
 
 #if CHIP_SYSTEM_CONFIG_USE_SOCKETS
-INET_ERROR RawEndPoint::GetSocket(IPAddressType aAddressType)
+CHIP_ERROR RawEndPoint::GetSocket(IPAddressType aAddressType)
 {
-    INET_ERROR lRetval = INET_NO_ERROR;
-    const int lType    = (SOCK_RAW | SOCK_FLAGS);
+    constexpr int lType = (SOCK_RAW | SOCK_FLAGS);
     int lProtocol;
 
     switch (aAddressType)
@@ -1038,32 +1017,28 @@ INET_ERROR RawEndPoint::GetSocket(IPAddressType aAddressType)
 #endif // INET_CONFIG_ENABLE_IPV4
 
     default:
-        lRetval = INET_ERROR_WRONG_ADDRESS_TYPE;
-        goto exit;
+        return INET_ERROR_WRONG_ADDRESS_TYPE;
     }
 
-    lRetval = IPEndPointBasis::GetSocket(aAddressType, lType, lProtocol);
-    SuccessOrExit(lRetval);
-
-exit:
-    return (lRetval);
+    return IPEndPointBasis::GetSocket(aAddressType, lType, lProtocol);
 }
 
-SocketEvents RawEndPoint::PrepareIO()
+// static
+void RawEndPoint::HandlePendingIO(System::WatchableSocket & socket)
 {
-    return (IPEndPointBasis::PrepareIO());
+    reinterpret_cast<RawEndPoint *>(socket.GetCallbackData())->HandlePendingIO();
 }
 
 void RawEndPoint::HandlePendingIO()
 {
-    if (mState == kState_Listening && OnMessageReceived != nullptr && mPendingIO.IsReadable())
+    if (mState == kState_Listening && OnMessageReceived != nullptr && mSocket.HasPendingRead())
     {
         const uint16_t lPort = 0;
 
         IPEndPointBasis::HandlePendingIO(lPort);
     }
 
-    mPendingIO.Clear();
+    mSocket.ClearPendingIO();
 }
 
 #endif // CHIP_SYSTEM_CONFIG_USE_SOCKETS

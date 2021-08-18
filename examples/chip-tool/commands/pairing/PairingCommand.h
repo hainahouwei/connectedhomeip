@@ -20,21 +20,56 @@
 
 #include "../../config/PersistentStorage.h"
 #include "../common/Command.h"
+#include "gen/CHIPClientCallbacks.h"
+#include "gen/CHIPClusters.h"
+
+#include <controller/ExampleOperationalCredentialsIssuer.h>
+#include <lib/support/ThreadOperationalDataset.h>
+#include <setup_payload/SetupPayload.h>
+#include <support/Span.h>
 
 enum class PairingMode
 {
     None,
     Bypass,
+    QRCode,
+    ManualCode,
     Ble,
     SoftAP,
+    Ethernet,
+    OnNetwork,
 };
 
-class PairingCommand : public Command, public chip::Controller::DevicePairingDelegate
+enum class PairingNetworkType
+{
+    None,
+    WiFi,
+    Thread,
+    Ethernet,
+};
+
+class PairingCommand : public Command,
+                       public chip::Controller::DevicePairingDelegate,
+                       public chip::Controller::DeviceAddressUpdateDelegate
 {
 public:
-    PairingCommand(const char * commandName, PairingMode mode) :
-        Command(commandName), mPairingMode(mode), mRemoteAddr{ IPAddress::Any, INET_NULL_INTERFACEID }
+    PairingCommand(const char * commandName, PairingMode mode, PairingNetworkType networkType) :
+        Command(commandName), mPairingMode(mode), mNetworkType(networkType), mRemoteAddr{ IPAddress::Any, INET_NULL_INTERFACEID }
     {
+        switch (networkType)
+        {
+        case PairingNetworkType::None:
+        case PairingNetworkType::Ethernet:
+            break;
+        case PairingNetworkType::WiFi:
+            AddArgument("ssid", &mSSID);
+            AddArgument("password", &mPassword);
+            break;
+        case PairingNetworkType::Thread:
+            AddArgument("operationalDataset", &mOperationalDataset);
+            break;
+        }
+
         switch (mode)
         {
         case PairingMode::None:
@@ -43,13 +78,25 @@ public:
             AddArgument("device-remote-ip", &mRemoteAddr);
             AddArgument("device-remote-port", 0, UINT16_MAX, &mRemotePort);
             break;
+        case PairingMode::QRCode:
+        case PairingMode::ManualCode:
+            AddArgument("fabric-id", 0, UINT64_MAX, &mFabricId);
+            AddArgument("payload", &mOnboardingPayload);
+            break;
         case PairingMode::Ble:
-            AddArgument("ssid", &mSSID);
-            AddArgument("password", &mPassword);
+            AddArgument("fabric-id", 0, UINT64_MAX, &mFabricId);
             AddArgument("setup-pin-code", 0, 134217727, &mSetupPINCode);
             AddArgument("discriminator", 0, 4096, &mDiscriminator);
             break;
+        case PairingMode::OnNetwork:
         case PairingMode::SoftAP:
+            AddArgument("fabric-id", 0, UINT64_MAX, &mFabricId);
+            AddArgument("setup-pin-code", 0, 134217727, &mSetupPINCode);
+            AddArgument("discriminator", 0, 4096, &mDiscriminator);
+            AddArgument("device-remote-ip", &mRemoteAddr);
+            AddArgument("device-remote-port", 0, UINT16_MAX, &mRemotePort);
+            break;
+        case PairingMode::Ethernet:
             AddArgument("setup-pin-code", 0, 134217727, &mSetupPINCode);
             AddArgument("discriminator", 0, 4096, &mDiscriminator);
             AddArgument("device-remote-ip", &mRemoteAddr);
@@ -59,29 +106,63 @@ public:
     }
 
     /////////// Command Interface /////////
-    CHIP_ERROR Run(PersistentStorage & storage, NodeId localId, NodeId remoteId) override;
+    CHIP_ERROR Run() override;
+    uint16_t GetWaitDurationInSeconds() const override { return 120; }
+    void Shutdown() override;
 
     /////////// DevicePairingDelegate Interface /////////
-    void OnStatusUpdate(chip::RendezvousSessionDelegate::Status status) override;
-    void OnNetworkCredentialsRequested(chip::RendezvousDeviceCredentialsDelegate * callback) override;
-    void OnOperationalCredentialsRequested(const char * csr, size_t csr_length,
-                                           chip::RendezvousDeviceCredentialsDelegate * callback) override;
+    void OnStatusUpdate(chip::Controller::DevicePairingDelegate::Status status) override;
     void OnPairingComplete(CHIP_ERROR error) override;
     void OnPairingDeleted(CHIP_ERROR error) override;
+    void OnCommissioningComplete(NodeId deviceId, CHIP_ERROR error) override;
+
+    /////////// DeviceAddressUpdateDelegate Interface /////////
+    void OnAddressUpdateComplete(NodeId nodeId, CHIP_ERROR error) override;
+
+    /////////// Network Commissioning Callbacks /////////
+    static void OnDefaultFailureResponse(void * context, uint8_t status);
+    static void OnAddNetworkResponse(void * context, uint8_t errorCode, uint8_t * debugText);
+    static void OnEnableNetworkResponse(void * context, uint8_t errorCode, uint8_t * debugText);
 
 private:
     CHIP_ERROR RunInternal(NodeId remoteId);
     CHIP_ERROR Pair(NodeId remoteId, PeerAddress address);
+    CHIP_ERROR PairWithQRCode(NodeId remoteId);
+    CHIP_ERROR PairWithManualCode(NodeId remoteId);
+    CHIP_ERROR PairWithCode(NodeId remoteId, chip::SetupPayload payload);
     CHIP_ERROR PairWithoutSecurity(NodeId remoteId, PeerAddress address);
     CHIP_ERROR Unpair(NodeId remoteId);
 
+    void InitCallbacks();
+    CHIP_ERROR SetupNetwork();
+    CHIP_ERROR AddNetwork(PairingNetworkType networkType);
+    CHIP_ERROR AddThreadNetwork();
+    CHIP_ERROR AddWiFiNetwork();
+    CHIP_ERROR EnableNetwork();
+    CHIP_ERROR UpdateNetworkAddress();
+
+    chip::ByteSpan GetThreadNetworkId();
+
     const PairingMode mPairingMode;
+    const PairingNetworkType mNetworkType;
     Command::AddressWithInterface mRemoteAddr;
+    NodeId mRemoteId;
     uint16_t mRemotePort;
+    uint64_t mFabricId;
     uint16_t mDiscriminator;
     uint32_t mSetupPINCode;
-    char * mSSID;
-    char * mPassword;
+    chip::ByteSpan mOperationalDataset;
+    uint8_t mExtendedPanId[chip::Thread::kSizeExtendedPanId];
+    chip::ByteSpan mSSID;
+    chip::ByteSpan mPassword;
+    char * mOnboardingPayload;
 
-    ChipDeviceCommissioner mCommissioner;
+    chip::Callback::Callback<NetworkCommissioningClusterAddThreadNetworkResponseCallback> * mOnAddThreadNetworkCallback = nullptr;
+    chip::Callback::Callback<NetworkCommissioningClusterAddWiFiNetworkResponseCallback> * mOnAddWiFiNetworkCallback     = nullptr;
+    chip::Callback::Callback<NetworkCommissioningClusterEnableNetworkResponseCallback> * mOnEnableNetworkCallback       = nullptr;
+    chip::Callback::Callback<DefaultFailureCallback> * mOnFailureCallback                                               = nullptr;
+    ChipDevice * mDevice;
+    chip::Controller::NetworkCommissioningCluster mCluster;
+    chip::EndpointId mEndpointId = 0;
+    chip::Controller::ExampleOperationalCredentialsIssuer mOpCredsIssuer;
 };

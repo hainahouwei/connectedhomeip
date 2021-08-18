@@ -32,10 +32,9 @@
 #include <core/CHIPCore.h>
 #include <platform/CHIPDeviceLayer.h>
 #include <protocols/echo/Echo.h>
+#include <protocols/secure_channel/PASESession.h>
 #include <support/ErrorStr.h>
 #include <system/SystemPacketBuffer.h>
-#include <transport/PASESession.h>
-#include <transport/SecureSessionMgr.h>
 #include <transport/raw/TCP.h>
 #include <transport/raw/UDP.h>
 
@@ -45,11 +44,10 @@ namespace {
 chip::Protocols::Echo::EchoServer gEchoServer;
 chip::TransportMgr<chip::Transport::UDP> gUDPManager;
 chip::TransportMgr<chip::Transport::TCP<kMaxTcpActiveConnectionCount, kMaxTcpPendingPackets>> gTCPManager;
-chip::SecureSessionMgr gSessionManager;
 chip::SecurePairingUsingTestSecret gTestPairing;
 
 // Callback handler when a CHIP EchoRequest is received.
-void HandleEchoRequestReceived(chip::Messaging::ExchangeContext * ec, chip::System::PacketBufferHandle payload)
+void HandleEchoRequestReceived(chip::Messaging::ExchangeContext * ec, chip::System::PacketBufferHandle && payload)
 {
     printf("Echo Request, len=%u ... sending response.\n", payload->DataLength());
 }
@@ -60,12 +58,12 @@ int main(int argc, char * argv[])
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     chip::Optional<chip::Transport::PeerAddress> peer(chip::Transport::Type::kUndefined);
-    bool useTCP = false;
+    bool useTCP      = false;
+    bool disableEcho = false;
 
-    chip::Transport::AdminPairingTable admins;
-    chip::Transport::AdminPairingInfo * adminInfo = nullptr;
+    chip::Transport::FabricTable fabrics;
 
-    const chip::Transport::AdminId gAdminId = 0;
+    const chip::FabricIndex gFabricIndex = 0;
 
     if (argc > 2)
     {
@@ -78,10 +76,12 @@ int main(int argc, char * argv[])
         useTCP = true;
     }
 
-    InitializeChip();
+    if ((argc == 2) && (strcmp(argv[1], "--disable") == 0))
+    {
+        disableEcho = true;
+    }
 
-    adminInfo = admins.AssignAdminId(gAdminId, chip::kTestDeviceNodeId);
-    VerifyOrExit(adminInfo != nullptr, err = CHIP_ERROR_NO_MEMORY);
+    InitializeChip();
 
     if (useTCP)
     {
@@ -89,7 +89,7 @@ int main(int argc, char * argv[])
             chip::Transport::TcpListenParameters(&chip::DeviceLayer::InetLayer).SetAddressType(chip::Inet::kIPAddressType_IPv4));
         SuccessOrExit(err);
 
-        err = gSessionManager.Init(chip::kTestDeviceNodeId, &chip::DeviceLayer::SystemLayer, &gTCPManager, &admins);
+        err = gSessionManager.Init(&chip::DeviceLayer::SystemLayer, &gTCPManager, &fabrics, &gMessageCounterManager);
         SuccessOrExit(err);
     }
     else
@@ -98,22 +98,31 @@ int main(int argc, char * argv[])
             chip::Transport::UdpListenParameters(&chip::DeviceLayer::InetLayer).SetAddressType(chip::Inet::kIPAddressType_IPv4));
         SuccessOrExit(err);
 
-        err = gSessionManager.Init(chip::kTestDeviceNodeId, &chip::DeviceLayer::SystemLayer, &gUDPManager, &admins);
+        err = gSessionManager.Init(&chip::DeviceLayer::SystemLayer, &gUDPManager, &fabrics, &gMessageCounterManager);
         SuccessOrExit(err);
     }
 
     err = gExchangeManager.Init(&gSessionManager);
     SuccessOrExit(err);
 
-    err = gEchoServer.Init(&gExchangeManager);
+    err = gMessageCounterManager.Init(&gExchangeManager);
     SuccessOrExit(err);
 
-    err = gSessionManager.NewPairing(peer, chip::kTestControllerNodeId, &gTestPairing,
-                                     chip::SecureSessionMgr::PairingDirection::kResponder, gAdminId);
+    if (!disableEcho)
+    {
+        err = gEchoServer.Init(&gExchangeManager);
+        SuccessOrExit(err);
+    }
+
+    err = gSessionManager.NewPairing(peer, chip::kTestControllerNodeId, &gTestPairing, chip::SecureSession::SessionRole::kResponder,
+                                     gFabricIndex);
     SuccessOrExit(err);
 
-    // Arrange to get a callback whenever an Echo Request is received.
-    gEchoServer.SetEchoRequestReceived(HandleEchoRequestReceived);
+    if (!disableEcho)
+    {
+        // Arrange to get a callback whenever an Echo Request is received.
+        gEchoServer.SetEchoRequestReceived(HandleEchoRequestReceived);
+    }
 
     printf("Listening for Echo requests...\n");
 
@@ -126,7 +135,10 @@ exit:
         exit(EXIT_FAILURE);
     }
 
-    gEchoServer.Shutdown();
+    if (!disableEcho)
+    {
+        gEchoServer.Shutdown();
+    }
 
     ShutdownChip();
 

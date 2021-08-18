@@ -25,12 +25,15 @@
 
 #include <netinet/in.h>
 
-#include "support/CHIPMem.h"
-#include "support/CodeUtils.h"
+#include <platform/internal/CHIPDeviceLayerInternal.h>
+#include <support/CHIPMem.h>
+#include <support/CHIPMemString.h>
+#include <support/CodeUtils.h>
 
 using chip::Mdns::kMdnsTypeMaxSize;
 using chip::Mdns::MdnsServiceProtocol;
 using chip::Mdns::TextEntry;
+using chip::System::SocketEvents;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
 using std::chrono::seconds;
@@ -78,13 +81,26 @@ chip::Inet::IPAddressType ToAddressType(AvahiProtocol protocol)
     return type;
 }
 
+AvahiWatchEvent ToAvahiWatchEvent(SocketEvents events)
+{
+    return static_cast<AvahiWatchEvent>((events.Has(chip::System::SocketEventFlags::kRead) ? AVAHI_WATCH_IN : 0) |
+                                        (events.Has(chip::System::SocketEventFlags::kWrite) ? AVAHI_WATCH_OUT : 0) |
+                                        (events.Has(chip::System::SocketEventFlags::kError) ? AVAHI_WATCH_ERR : 0));
+}
+
+void AvahiWatchCallbackTrampoline(chip::System::WatchableSocket & socket)
+{
+    AvahiWatch * const watch = reinterpret_cast<AvahiWatch *>(socket.GetCallbackData());
+    watch->mCallback(watch, socket.GetFD(), ToAvahiWatchEvent(socket.GetPendingEvents()), watch->mContext);
+}
+
 CHIP_ERROR MakeAvahiStringListFromTextEntries(TextEntry * entries, size_t size, AvahiStringList ** strListOut)
 {
     *strListOut = avahi_string_list_new(nullptr, nullptr);
 
     for (size_t i = 0; i < size; i++)
     {
-        uint8_t buf[kMdnsTypeMaxSize];
+        uint8_t buf[chip::Mdns::kMdnsTextMaxSize];
         size_t offset = static_cast<size_t>(snprintf(reinterpret_cast<char *>(buf), sizeof(buf), "%s=", entries[i].mKey));
 
         if (offset + entries[i].mDataSize > sizeof(buf))
@@ -132,6 +148,8 @@ Poller::Poller()
     mAvahiPoller.timeout_new    = TimeoutNew;
     mAvahiPoller.timeout_update = TimeoutUpdate;
     mAvahiPoller.timeout_free   = TimeoutFree;
+
+    mWatchableEvents = &DeviceLayer::SystemLayer.WatchableEventsManager();
 }
 
 AvahiWatch * Poller::WatchNew(const struct AvahiPoll * poller, int fd, AvahiWatchEvent event, AvahiWatchCallback callback,
@@ -144,19 +162,49 @@ AvahiWatch * Poller::WatchNew(int fd, AvahiWatchEvent event, AvahiWatchCallback 
 {
     VerifyOrDie(callback != nullptr && fd >= 0);
 
-    mWatches.emplace_back(new AvahiWatch{ fd, event, 0, callback, context, this });
+    auto watch = std::make_unique<AvahiWatch>();
+    watch->mSocket.Init(*mWatchableEvents);
+    LogErrorOnFailure(watch->mSocket.Attach(fd));
+    watch->mSocket.SetCallback(AvahiWatchCallbackTrampoline, reinterpret_cast<intptr_t>(watch.get()));
+    if (event & AVAHI_WATCH_IN)
+    {
+        LogErrorOnFailure(watch->mSocket.RequestCallbackOnPendingRead());
+    }
+    if (event & AVAHI_WATCH_OUT)
+    {
+        LogErrorOnFailure(watch->mSocket.RequestCallbackOnPendingWrite());
+    }
+    watch->mCallback = callback;
+    watch->mContext  = context;
+    watch->mPoller   = this;
+    mWatches.emplace_back(std::move(watch));
 
     return mWatches.back().get();
 }
 
 void Poller::WatchUpdate(AvahiWatch * watch, AvahiWatchEvent event)
 {
-    watch->mWatchEvents = event;
+    if (event & AVAHI_WATCH_IN)
+    {
+        LogErrorOnFailure(watch->mSocket.RequestCallbackOnPendingRead());
+    }
+    else
+    {
+        LogErrorOnFailure(watch->mSocket.ClearCallbackOnPendingRead());
+    }
+    if (event & AVAHI_WATCH_OUT)
+    {
+        LogErrorOnFailure(watch->mSocket.RequestCallbackOnPendingWrite());
+    }
+    else
+    {
+        LogErrorOnFailure(watch->mSocket.ClearCallbackOnPendingWrite());
+    }
 }
 
 AvahiWatchEvent Poller::WatchGetEvents(AvahiWatch * watch)
 {
-    return static_cast<AvahiWatchEvent>(watch->mHappenedEvents);
+    return ToAvahiWatchEvent(watch->mSocket.GetPendingEvents());
 }
 
 void Poller::WatchFree(AvahiWatch * watch)
@@ -166,6 +214,7 @@ void Poller::WatchFree(AvahiWatch * watch)
 
 void Poller::WatchFree(AvahiWatch & watch)
 {
+    (void) watch.mSocket.ReleaseFD();
     mWatches.erase(std::remove_if(mWatches.begin(), mWatches.end(),
                                   [&watch](const std::unique_ptr<AvahiWatch> & aValue) { return aValue.get() == &watch; }),
                    mWatches.end());
@@ -225,37 +274,9 @@ void Poller::TimeoutFree(AvahiTimeout & timer)
                   mTimers.end());
 }
 
-void Poller::UpdateFdSet(fd_set & readFdSet, fd_set & writeFdSet, fd_set & errorFdSet, int & aMaxFd, timeval & timeout)
+void Poller::GetTimeout(timeval & timeout)
 {
     microseconds timeoutVal = seconds(timeout.tv_sec) + microseconds(timeout.tv_usec);
-
-    for (auto && watch : mWatches)
-    {
-        int fd                 = watch->mFd;
-        AvahiWatchEvent events = watch->mWatchEvents;
-
-        if (AVAHI_WATCH_IN & events)
-        {
-            FD_SET(fd, &readFdSet);
-        }
-
-        if (AVAHI_WATCH_OUT & events)
-        {
-            FD_SET(fd, &writeFdSet);
-        }
-
-        if (AVAHI_WATCH_ERR & events)
-        {
-            FD_SET(fd, &errorFdSet);
-        }
-
-        if (aMaxFd < fd)
-        {
-            aMaxFd = fd;
-        }
-
-        watch->mHappenedEvents = 0;
-    }
 
     for (auto && timer : mTimers)
     {
@@ -281,37 +302,9 @@ void Poller::UpdateFdSet(fd_set & readFdSet, fd_set & writeFdSet, fd_set & error
     timeout.tv_usec = static_cast<uint64_t>(timeoutVal.count()) % kUsPerSec;
 }
 
-void Poller::Process(const fd_set & readFdSet, const fd_set & writeFdSet, const fd_set & errorFdSet)
+void Poller::HandleTimeout()
 {
     steady_clock::time_point now = steady_clock::now();
-
-    for (auto && watch : mWatches)
-    {
-        int fd                 = watch->mFd;
-        AvahiWatchEvent events = watch->mWatchEvents;
-
-        watch->mHappenedEvents = 0;
-
-        if ((AVAHI_WATCH_IN & events) && FD_ISSET(fd, &readFdSet))
-        {
-            watch->mHappenedEvents |= AVAHI_WATCH_IN;
-        }
-
-        if ((AVAHI_WATCH_OUT & events) && FD_ISSET(fd, &writeFdSet))
-        {
-            watch->mHappenedEvents |= AVAHI_WATCH_OUT;
-        }
-
-        if ((AVAHI_WATCH_ERR & events) && FD_ISSET(fd, &errorFdSet))
-        {
-            watch->mHappenedEvents |= AVAHI_WATCH_ERR;
-        }
-
-        if (watch->mHappenedEvents)
-        {
-            watch->mCallback(watch.get(), watch->mFd, static_cast<AvahiWatchEvent>(watch->mHappenedEvents), watch->mContext);
-        }
-    }
 
     for (auto && timer : mTimers)
     {
@@ -499,7 +492,7 @@ exit:
     }
     if (error != CHIP_NO_ERROR)
     {
-        ChipLogError(DeviceLayer, "Avahi publish service failed: %d", static_cast<int>(error));
+        ChipLogError(DeviceLayer, "Avahi publish service failed: %" CHIP_ERROR_FORMAT, error.Format());
     }
 
     return error;
@@ -540,25 +533,45 @@ CHIP_ERROR MdnsAvahi::Browse(const char * type, MdnsServiceProtocol protocol, ch
     return browser == nullptr ? CHIP_ERROR_INTERNAL : CHIP_NO_ERROR;
 }
 
-MdnsServiceProtocol TruncateProtocolInType(char * type)
+MdnsServiceProtocol GetProtocolInType(const char * type)
 {
-    char * deliminator           = strrchr(type, '.');
-    MdnsServiceProtocol protocol = MdnsServiceProtocol::kMdnsProtocolUnknown;
+    const char * deliminator = strrchr(type, '.');
 
-    if (deliminator != NULL)
+    if (deliminator == NULL)
     {
-        if (strcmp("._tcp", deliminator) == 0)
-        {
-            protocol     = MdnsServiceProtocol::kMdnsProtocolTcp;
-            *deliminator = 0;
-        }
-        else if (strcmp("._udp", deliminator) == 0)
-        {
-            protocol     = MdnsServiceProtocol::kMdnsProtocolUdp;
-            *deliminator = 0;
-        }
+        ChipLogError(Discovery, "Failed to find protocol in type: %s", type);
+        return MdnsServiceProtocol::kMdnsProtocolUnknown;
     }
-    return protocol;
+
+    if (strcmp("._tcp", deliminator) == 0)
+    {
+        return MdnsServiceProtocol::kMdnsProtocolTcp;
+    }
+    if (strcmp("._udp", deliminator) == 0)
+    {
+        return MdnsServiceProtocol::kMdnsProtocolUdp;
+    }
+
+    ChipLogError(Discovery, "Unknown protocol in type: %s", type);
+    return MdnsServiceProtocol::kMdnsProtocolUnknown;
+}
+
+/// Copies the type from a string containing both type and protocol
+///
+/// e.g. if input is "foo.bar", output is "foo", input is 'a.b._tcp", output is "a.b"
+template <size_t N>
+void CopyTypeWithoutProtocol(char (&dest)[N], const char * typeAndProtocol)
+{
+    const char * dotPos          = strrchr(typeAndProtocol, '.');
+    size_t lengthWithoutProtocol = (dotPos != nullptr) ? static_cast<size_t>(dotPos - typeAndProtocol) : N;
+
+    Platform::CopyString(dest, typeAndProtocol);
+
+    /// above copied everything including the protocol. Truncate the protocol away.
+    if (lengthWithoutProtocol < N)
+    {
+        dest[lengthWithoutProtocol] = 0;
+    }
 }
 
 void MdnsAvahi::HandleBrowse(AvahiServiceBrowser * browser, AvahiIfIndex interface, AvahiProtocol protocol, AvahiBrowserEvent event,
@@ -580,12 +593,11 @@ void MdnsAvahi::HandleBrowse(AvahiServiceBrowser * browser, AvahiIfIndex interfa
         {
             MdnsService service = {};
 
-            strncpy(service.mName, name, sizeof(service.mName));
-            strncpy(service.mType, type, sizeof(service.mType));
-            service.mName[kMdnsNameMaxSize] = 0;
-            service.mType[kMdnsTypeMaxSize] = 0;
-            service.mProtocol               = TruncateProtocolInType(service.mType);
+            Platform::CopyString(service.mName, name);
+            CopyTypeWithoutProtocol(service.mType, type);
+            service.mProtocol               = GetProtocolInType(type);
             service.mAddressType            = ToAddressType(protocol);
+            service.mType[kMdnsTypeMaxSize] = 0;
             context->mServices.push_back(service);
         }
         break;
@@ -641,7 +653,7 @@ CHIP_ERROR MdnsAvahi::Resolve(const char * name, const char * type, MdnsServiceP
 
 void MdnsAvahi::HandleResolve(AvahiServiceResolver * resolver, AvahiIfIndex interface, AvahiProtocol protocol,
                               AvahiResolverEvent event, const char * name, const char * type, const char * /*domain*/,
-                              const char * /*host_name*/, const AvahiAddress * address, uint16_t port, AvahiStringList * txt,
+                              const char * host_name, const AvahiAddress * address, uint16_t port, AvahiStringList * txt,
                               AvahiLookupResultFlags flags, void * userdata)
 {
     ResolveContext * context = reinterpret_cast<ResolveContext *>(userdata);
@@ -658,13 +670,19 @@ void MdnsAvahi::HandleResolve(AvahiServiceResolver * resolver, AvahiIfIndex inte
 
         result.mAddress.SetValue(chip::Inet::IPAddress());
         ChipLogError(DeviceLayer, "Avahi resolve found");
-        strncpy(result.mName, name, sizeof(result.mName));
-        strncpy(result.mType, type, sizeof(result.mType));
-        result.mName[kMdnsNameMaxSize] = 0;
-        result.mType[kMdnsTypeMaxSize] = 0;
-        result.mProtocol               = TruncateProtocolInType(result.mType);
-        result.mPort                   = port;
-        result.mAddressType            = ToAddressType(protocol);
+
+        Platform::CopyString(result.mName, name);
+        CopyTypeWithoutProtocol(result.mType, type);
+        result.mProtocol    = GetProtocolInType(type);
+        result.mPort        = port;
+        result.mAddressType = ToAddressType(protocol);
+        Platform::CopyString(result.mHostName, host_name);
+        // Returned value is full QName, want only host part.
+        char * dot = strchr(result.mHostName, '.');
+        if (dot != nullptr)
+        {
+            *dot = '\0';
+        }
 
         if (address)
         {
@@ -727,14 +745,14 @@ MdnsAvahi::~MdnsAvahi()
     }
 }
 
-void UpdateMdnsDataset(fd_set & readFdSet, fd_set & writeFdSet, fd_set & errorFdSet, int & maxFd, timeval & timeout)
+void GetMdnsTimeout(timeval & timeout)
 {
-    MdnsAvahi::GetInstance().GetPoller().UpdateFdSet(readFdSet, writeFdSet, errorFdSet, maxFd, timeout);
+    MdnsAvahi::GetInstance().GetPoller().GetTimeout(timeout);
 }
 
-void ProcessMdns(fd_set & readFdSet, fd_set & writeFdSet, fd_set & errorFdSet)
+void HandleMdnsTimeout()
 {
-    MdnsAvahi::GetInstance().GetPoller().Process(readFdSet, writeFdSet, errorFdSet);
+    MdnsAvahi::GetInstance().GetPoller().HandleTimeout();
 }
 
 CHIP_ERROR ChipMdnsInit(MdnsAsyncReturnCallback initCallback, MdnsAsyncReturnCallback errorCallback, void * context)
@@ -742,19 +760,23 @@ CHIP_ERROR ChipMdnsInit(MdnsAsyncReturnCallback initCallback, MdnsAsyncReturnCal
     return MdnsAvahi::GetInstance().Init(initCallback, errorCallback, context);
 }
 
-CHIP_ERROR ChipMdnsSetHostname(const char * hostname)
-{
-    return MdnsAvahi::GetInstance().SetHostname(hostname);
-}
-
 CHIP_ERROR ChipMdnsPublishService(const MdnsService * service)
 {
+    if (strcmp(service->mHostName, "") != 0)
+    {
+        ReturnErrorOnFailure(MdnsAvahi::GetInstance().SetHostname(service->mHostName));
+    }
     return MdnsAvahi::GetInstance().PublishService(*service);
 }
 
 CHIP_ERROR ChipMdnsStopPublish()
 {
     return MdnsAvahi::GetInstance().StopPublish();
+}
+
+CHIP_ERROR ChipMdnsStopPublishService(const MdnsService * service)
+{
+    return CHIP_ERROR_NOT_IMPLEMENTED;
 }
 
 CHIP_ERROR ChipMdnsBrowse(const char * type, MdnsServiceProtocol protocol, chip::Inet::IPAddressType addressType,

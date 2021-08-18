@@ -15,12 +15,22 @@
 name: Cirque
 
 on:
-    push:
-    pull_request:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+    group: ${{ github.ref }}-${{ github.workflow }}-${{ (github.event_name == 'pull_request' && github.event.number) || (github.event_name == 'workflow_dispatch' && github.run_number) || github.sha }}
+    cancel-in-progress: true
 
 jobs:
     cirque:
         name: Cirque
+        timeout-minutes: 60
+        
+        env:
+            DOCKER_RUN_VERSION: 0.4.21
+            GITHUB_CACHE_PATH: /tmp/cirque-cache/
 
         runs-on: ubuntu-latest
         if: github.actor != 'restyled-io[bot]'
@@ -42,10 +52,37 @@ jobs:
               uses: actions/checkout@v2
               with:
                   submodules: true
+
+            - name: Get cirque cache key
+              id: cirque-key
+              run: |
+                echo "::set-output name=val::$(scripts/tests/cirque_tests.sh cachekeyhash)"
+
+            - name: Cache
+              uses: actions/cache@v2
+              id: cache
+              with:
+                  path: ${{ env.GITHUB_CACHE_PATH }}
+                  key: ${{ runner.os }}-cirque-${{ steps.cirque-key.outputs.val }}
+                  restore-keys: |
+                    ${{ runner.os }}-cirque-
+
             - name: Bootstrap
+              timeout-minutes: 10
               run: |
                   integrations/docker/images/chip-build-cirque/run.sh \
                     --env GITHUB_ACTION_RUN=1 \
+                    --env GITHUB_CACHE_PATH=${{ env.GITHUB_CACHE_PATH }} \
+                    --volume /tmp:/tmp \
+                    -- scripts/build/gn_bootstrap.sh
+
+            - name: Cirque Bootstrap
+              timeout-minutes: 15
+              run: |
+                  integrations/docker/images/chip-build-cirque/run.sh \
+                    --env GITHUB_ACTION_RUN=1 \
+                    --env GITHUB_CACHE_PATH=${{ env.GITHUB_CACHE_PATH }} \
+                    --volume /tmp:/tmp \
                     -- scripts/tests/cirque_tests.sh bootstrap
             - name: Artifact suffix
               id: outsuffix
@@ -54,7 +91,20 @@ jobs:
                   cond: ${{ github.event.pull_request.number == '' }}
                   if_true: "${{ github.sha }}"
                   if_false: "pull-${{ github.event.pull_request.number }}"
+            - name: Build Binaries
+              timeout-minutes: 15
+              run: |
+                  integrations/docker/images/chip-build-cirque/run.sh \
+                    --env GITHUB_ACTION_RUN=1 \
+                    --env GITHUB_CACHE_PATH=${{ env.GITHUB_CACHE_PATH }} \
+                    --volume /tmp:/tmp \
+                    -- ./gn_build.sh \
+                    chip_build_tests=false \
+                    enable_host_gcc_build=true \
+                    enable_host_gcc_mbedtls_build=false \
+                    enable_host_clang_build = false
             - name: Run Tests
+              timeout-minutes: 25
               run: |
                   integrations/docker/images/chip-build-cirque/run.sh \
                      --env LOG_DIR=/tmp/cirque_test_output \

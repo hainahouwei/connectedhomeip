@@ -14,7 +14,6 @@ RUN set -x \
     clang \
     clang-format \
     clang-tidy \
-    cmake \
     curl \
     flex \
     g++ \
@@ -55,6 +54,7 @@ RUN set -x \
     python3-dev \
     python3-pip \
     python3-venv \
+    rsync \
     shellcheck \
     strace \
     systemd \
@@ -65,20 +65,28 @@ RUN set -x \
     && rm -rf /var/lib/apt/lists/ \
     && : # last line
 
+# Cmake (Mbed OS requires >=3.19.0-rc3 version which is not available in Ubuntu 20.04 repository)
+RUN set -x \
+    && (cd /tmp \
+    && wget --progress=dot:giga https://github.com/Kitware/CMake/releases/download/v3.19.3/cmake-3.19.3-Linux-x86_64.sh \
+    && sh cmake-3.19.3-Linux-x86_64.sh --exclude-subdir --prefix=/usr/local \
+    && rm -rf cmake-3.19.3-Linux-x86_64.sh) \
+    && exec bash \
+    && : # last line
+
 # Python 2 and PIP
 RUN set -x \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common \
     && add-apt-repository universe \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y python python2 \
-    && curl https://bootstrap.pypa.io/2.7/get-pip.py --output get-pip.py \
+    && curl https://bootstrap.pypa.io/pip/2.7/get-pip.py --output get-pip.py \
     && python2 get-pip.py \
     && rm -rf /var/lib/apt/lists/ \
     && : # last line
 
 RUN set -x \
-    && pip3 install circleci attrs coloredlogs PyGithub pygit future \
-    portpicker mobly                                                 \
+    && pip3 install attrs coloredlogs PyGithub pygit future portpicker mobly click \
     && : # last line
 
 # build and install gn

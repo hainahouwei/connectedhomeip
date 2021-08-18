@@ -18,17 +18,20 @@
  */
 #include "AppTask.h"
 #include "AppEvent.h"
-#include "Server.h"
 #include "support/ErrorStr.h"
+#include <app/server/Server.h>
 
-#include "OnboardingCodesUtil.h"
+#include <app/server/OnboardingCodesUtil.h>
+#include <credentials/DeviceAttestationCredsProvider.h>
+#include <credentials/examples/DeviceAttestationCredsExample.h>
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/internal/DeviceNetworkInfo.h>
+#include <support/ThreadOperationalDataset.h>
 
-#include "attribute-storage.h"
-#include "gen/attribute-id.h"
-#include "gen/attribute-type.h"
-#include "gen/cluster-id.h"
+#include <app/common/gen/attribute-id.h>
+#include <app/common/gen/attribute-type.h>
+#include <app/common/gen/cluster-id.h>
+#include <app/util/attribute-storage.h>
 
 #include "Keyboard.h"
 #include "LED.h"
@@ -54,13 +57,18 @@ static bool sHaveServiceConnectivity = false;
 
 static uint32_t eventMask = 0;
 
+#if CHIP_DEVICE_CONFIG_THREAD_ENABLE_CLI
+extern "C" void K32WUartProcess(void);
+#endif
+
+using namespace ::chip::Credentials;
 using namespace ::chip::DeviceLayer;
 
 AppTask AppTask::sAppTask;
 
-int AppTask::StartAppTask()
+CHIP_ERROR AppTask::StartAppTask()
 {
-    int err = CHIP_NO_ERROR;
+    CHIP_ERROR err = CHIP_NO_ERROR;
 
     sAppEventQueue = xQueueCreate(kAppEventQueueSize, sizeof(AppEvent));
     if (sAppEventQueue == NULL)
@@ -72,15 +80,18 @@ int AppTask::StartAppTask()
     return err;
 }
 
-int AppTask::Init()
+CHIP_ERROR AppTask::Init()
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
 
     // Init ZCL Data Model and start server
     InitServer();
 
+    // Initialize device attestation config
+    SetDeviceAttestationCredentialsProvider(Examples::GetExampleDACProvider());
+
     // QR code will be used with CHIP Tool
-    PrintOnboardingCodes(chip::RendezvousInformationFlags::kBLE);
+    PrintOnboardingCodes(chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
 
     TMR_Init();
 
@@ -92,6 +103,7 @@ int AppTask::Init()
 
     sLockLED.Init(LOCK_STATE_LED);
     sLockLED.Set(!BoltLockMgr().IsUnlocked());
+    UpdateClusterState();
 
     /* intialize the Keyboard and button press calback */
     KBD_Init(KBD_Callback);
@@ -109,11 +121,11 @@ int AppTask::Init()
         assert(err == CHIP_NO_ERROR);
     }
 
-    err = BoltLockMgr().Init();
-    if (err != CHIP_NO_ERROR)
+    int status = BoltLockMgr().Init();
+    if (status != 0)
     {
         K32W_LOG("BoltLockMgr().Init() failed");
-        assert(err == CHIP_NO_ERROR);
+        assert(status == 0);
     }
 
     BoltLockMgr().SetCallbacks(ActionInitiated, ActionCompleted);
@@ -127,13 +139,16 @@ int AppTask::Init()
 
     // Print the current software version
     char currentFirmwareRev[ConfigurationManager::kMaxFirmwareRevisionLength + 1] = { 0 };
-    size_t currentFirmwareRevLen;
-    err = ConfigurationMgr().GetFirmwareRevision(currentFirmwareRev, sizeof(currentFirmwareRev), currentFirmwareRevLen);
+    err = ConfigurationMgr().GetFirmwareRevisionString(currentFirmwareRev, sizeof(currentFirmwareRev));
     if (err != CHIP_NO_ERROR)
     {
         K32W_LOG("Get version error");
         assert(err == CHIP_NO_ERROR);
     }
+
+#ifdef CONFIG_CHIP_NFC_COMMISSIONING
+    PlatformMgr().AddEventHandler(ThreadProvisioningHandler, 0);
+#endif
 
     K32W_LOG("Current Firmware Version: %s", currentFirmwareRev);
 
@@ -142,10 +157,9 @@ int AppTask::Init()
 
 void AppTask::AppTaskMain(void * pvParameter)
 {
-    int err;
     AppEvent event;
 
-    err = sAppTask.Init();
+    CHIP_ERROR err = sAppTask.Init();
     if (err != CHIP_NO_ERROR)
     {
         K32W_LOG("AppTask.Init() failed");
@@ -168,6 +182,10 @@ void AppTask::AppTaskMain(void * pvParameter)
         // task is busy (e.g. with a long crypto operation).
         if (PlatformMgr().TryLockChipStack())
         {
+#if CHIP_DEVICE_CONFIG_THREAD_ENABLE_CLI
+            K32WUartProcess();
+#endif
+
             sIsThreadProvisioned     = ConnectivityMgr().IsThreadProvisioned();
             sIsThreadEnabled         = ConnectivityMgr().IsThreadEnabled();
             sHaveBLEConnections      = (ConnectivityMgr().NumBLEConnections() != 0);
@@ -216,7 +234,7 @@ void AppTask::AppTaskMain(void * pvParameter)
 
 void AppTask::ButtonEventHandler(uint8_t pin_no, uint8_t button_action)
 {
-    if ((pin_no != RESET_BUTTON) && (pin_no != LOCK_BUTTON) && (pin_no != JOIN_BUTTON))
+    if ((pin_no != RESET_BUTTON) && (pin_no != LOCK_BUTTON) && (pin_no != JOIN_BUTTON) && (pin_no != BLE_BUTTON))
     {
         return;
     }
@@ -238,7 +256,17 @@ void AppTask::ButtonEventHandler(uint8_t pin_no, uint8_t button_action)
     {
         button_event.Handler = JoinHandler;
     }
+    else if (pin_no == BLE_BUTTON)
+    {
+        button_event.Handler = BleHandler;
 
+#if !(defined OM15082)
+        if (button_action == RESET_BUTTON_PUSH)
+        {
+            button_event.Handler = ResetActionEventHandler;
+        }
+#endif
+    }
     sAppTask.PostEvent(&button_event);
 }
 
@@ -267,14 +295,27 @@ void AppTask::HandleKeyboard(void)
         switch (keyEvent)
         {
         case gKBD_EventPB1_c:
+#if (defined OM15082)
             ButtonEventHandler(RESET_BUTTON, RESET_BUTTON_PUSH);
             break;
+#else
+            ButtonEventHandler(BLE_BUTTON, BLE_BUTTON_PUSH);
+            break;
+#endif
         case gKBD_EventPB2_c:
             ButtonEventHandler(LOCK_BUTTON, LOCK_BUTTON_PUSH);
             break;
         case gKBD_EventPB3_c:
             ButtonEventHandler(JOIN_BUTTON, JOIN_BUTTON_PUSH);
             break;
+        case gKBD_EventPB4_c:
+            ButtonEventHandler(BLE_BUTTON, BLE_BUTTON_PUSH);
+            break;
+#if !(defined OM15082)
+        case gKBD_EventLongPB1_c:
+            ButtonEventHandler(BLE_BUTTON, RESET_BUTTON_PUSH);
+            break;
+#endif
         default:
             break;
         }
@@ -303,7 +344,7 @@ void AppTask::FunctionTimerEventHandler(AppEvent * aEvent)
 
 void AppTask::ResetActionEventHandler(AppEvent * aEvent)
 {
-    if (aEvent->ButtonEvent.PinNo != RESET_BUTTON)
+    if (aEvent->ButtonEvent.PinNo != RESET_BUTTON && aEvent->ButtonEvent.PinNo != BLE_BUTTON)
         return;
 
     if (sAppTask.mResetTimerActive)
@@ -350,7 +391,7 @@ void AppTask::ResetActionEventHandler(AppEvent * aEvent)
 void AppTask::LockActionEventHandler(AppEvent * aEvent)
 {
     BoltLockManager::Action_t action;
-    int err        = CHIP_NO_ERROR;
+    CHIP_ERROR err = CHIP_NO_ERROR;
     int32_t actor  = 0;
     bool initiated = false;
 
@@ -378,7 +419,8 @@ void AppTask::LockActionEventHandler(AppEvent * aEvent)
     }
     else
     {
-        err = CHIP_ERROR_MAX;
+        err    = CHIP_ERROR_INTERNAL;
+        action = BoltLockManager::INVALID_ACTION;
     }
 
     if (err == CHIP_NO_ERROR)
@@ -394,48 +436,23 @@ void AppTask::LockActionEventHandler(AppEvent * aEvent)
 
 void AppTask::ThreadStart()
 {
-    chip::DeviceLayer::Internal::DeviceNetworkInfo networkInfo;
+    chip::Thread::OperationalDataset dataset{};
 
-    memset(networkInfo.ThreadNetworkName, 0, chip::DeviceLayer::Internal::kMaxThreadNetworkNameLength + 1);
-    memcpy(networkInfo.ThreadNetworkName, "OpenThread", 10);
+    constexpr uint8_t xpanid[]    = { 0xde, 0xad, 0x00, 0xbe, 0xef, 0x00, 0xca, 0xfe };
+    constexpr uint8_t masterkey[] = {
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF
+    };
+    constexpr uint16_t panid   = 0xabcd;
+    constexpr uint16_t channel = 15;
 
-    networkInfo.ThreadExtendedPANId[0] = 0xde;
-    networkInfo.ThreadExtendedPANId[1] = 0xad;
-    networkInfo.ThreadExtendedPANId[2] = 0x00;
-    networkInfo.ThreadExtendedPANId[3] = 0xbe;
-    networkInfo.ThreadExtendedPANId[4] = 0xef;
-    networkInfo.ThreadExtendedPANId[5] = 0x00;
-    networkInfo.ThreadExtendedPANId[6] = 0xca;
-    networkInfo.ThreadExtendedPANId[7] = 0xfe;
-
-    networkInfo.ThreadMasterKey[0]  = 0x00;
-    networkInfo.ThreadMasterKey[1]  = 0x11;
-    networkInfo.ThreadMasterKey[2]  = 0x22;
-    networkInfo.ThreadMasterKey[3]  = 0x33;
-    networkInfo.ThreadMasterKey[4]  = 0x44;
-    networkInfo.ThreadMasterKey[5]  = 0x55;
-    networkInfo.ThreadMasterKey[6]  = 0x66;
-    networkInfo.ThreadMasterKey[7]  = 0x77;
-    networkInfo.ThreadMasterKey[8]  = 0x88;
-    networkInfo.ThreadMasterKey[9]  = 0x99;
-    networkInfo.ThreadMasterKey[10] = 0xAA;
-    networkInfo.ThreadMasterKey[11] = 0xBB;
-    networkInfo.ThreadMasterKey[12] = 0xCC;
-    networkInfo.ThreadMasterKey[13] = 0xDD;
-    networkInfo.ThreadMasterKey[14] = 0xEE;
-    networkInfo.ThreadMasterKey[15] = 0xFF;
-
-    networkInfo.ThreadPANId   = 0xabcd;
-    networkInfo.ThreadChannel = 15;
-
-    networkInfo.FieldPresent.ThreadExtendedPANId = true;
-    networkInfo.FieldPresent.ThreadMeshPrefix    = false;
-    networkInfo.FieldPresent.ThreadPSKc          = false;
-    networkInfo.NetworkId                        = 0;
-    networkInfo.FieldPresent.NetworkId           = true;
+    dataset.SetNetworkName("OpenThread");
+    dataset.SetExtendedPanId(xpanid);
+    dataset.SetMasterKey(masterkey);
+    dataset.SetPanId(panid);
+    dataset.SetChannel(channel);
 
     ThreadStackMgr().SetThreadEnabled(false);
-    ThreadStackMgr().SetThreadProvision(networkInfo);
+    ThreadStackMgr().SetThreadProvision(dataset.AsByteSpan());
     ThreadStackMgr().SetThreadEnabled(true);
 }
 
@@ -455,6 +472,68 @@ void AppTask::JoinHandler(AppEvent * aEvent)
      */
     ThreadStart();
 }
+
+void AppTask::BleHandler(AppEvent * aEvent)
+{
+    if (aEvent->ButtonEvent.PinNo != BLE_BUTTON)
+        return;
+
+    if (sAppTask.mFunction != kFunction_NoneSelected)
+    {
+        K32W_LOG("Another function is scheduled. Could not toggle BLE state!");
+        return;
+    }
+
+    if (ConnectivityMgr().IsBLEAdvertisingEnabled())
+    {
+        ConnectivityMgr().SetBLEAdvertisingEnabled(false);
+        K32W_LOG("Stopped BLE Advertising!");
+    }
+    else
+    {
+        ConnectivityMgr().SetBLEAdvertisingEnabled(true);
+
+        if (OpenBasicCommissioningWindow(chip::ResetFabrics::kNo) == CHIP_NO_ERROR)
+        {
+            K32W_LOG("Started BLE Advertising!");
+        }
+        else
+        {
+            K32W_LOG("OpenBasicCommissioningWindow() failed");
+        }
+    }
+}
+
+#ifdef CONFIG_CHIP_NFC_COMMISSIONING
+void AppTask::ThreadProvisioningHandler(const ChipDeviceEvent * event, intptr_t)
+{
+    if (event->Type == DeviceEventType::kCHIPoBLEAdvertisingChange && event->CHIPoBLEAdvertisingChange.Result == kActivity_Stopped)
+    {
+        if (!NFCMgr().IsTagEmulationStarted())
+        {
+            K32W_LOG("NFC Tag emulation is already stopped!");
+        }
+        else
+        {
+            NFCMgr().StopTagEmulation();
+            K32W_LOG("Stopped NFC Tag Emulation!");
+        }
+    }
+    else if (event->Type == DeviceEventType::kCHIPoBLEAdvertisingChange &&
+             event->CHIPoBLEAdvertisingChange.Result == kActivity_Started)
+    {
+        if (NFCMgr().IsTagEmulationStarted())
+        {
+            K32W_LOG("NFC Tag emulation is already started!");
+        }
+        else
+        {
+            ShareQRCodeOverNFC(chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kBLE));
+            K32W_LOG("Started NFC Tag Emulation!");
+        }
+    }
+}
+#endif
 
 void AppTask::CancelTimer()
 {
@@ -498,6 +577,11 @@ void AppTask::ActionInitiated(BoltLockManager::Action_t aAction, int32_t aActor)
         K32W_LOG("Unlock Action has been initiated")
     }
 
+    if (aActor == AppEvent::kEventType_Button)
+    {
+        sAppTask.mSyncClusterToButtonAction = true;
+    }
+
     sAppTask.mFunction = kFunctionLockUnlock;
     sLockLED.Blink(50, 50);
 }
@@ -516,6 +600,12 @@ void AppTask::ActionCompleted(BoltLockManager::Action_t aAction)
     {
         K32W_LOG("Unlock Action has been completed")
         sLockLED.Set(false);
+    }
+
+    if (sAppTask.mSyncClusterToButtonAction)
+    {
+        sAppTask.UpdateClusterState();
+        sAppTask.mSyncClusterToButtonAction = false;
     }
 
     sAppTask.mFunction = kFunction_NoneSelected;
@@ -563,6 +653,6 @@ void AppTask::UpdateClusterState(void)
                                                  (uint8_t *) &newValue, ZCL_BOOLEAN_ATTRIBUTE_TYPE);
     if (status != EMBER_ZCL_STATUS_SUCCESS)
     {
-        ChipLogError(NotSpecified, "ERR: updating on/off %x", status);
+        ChipLogError(NotSpecified, "ERR: updating on/off %" PRIx8, status);
     }
 }

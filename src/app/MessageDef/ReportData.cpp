@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include <app/AppBuildConfig.h>
+
 using namespace chip;
 using namespace chip::TLV;
 
@@ -43,9 +45,7 @@ CHIP_ERROR ReportData::Parser::Init(const chip::TLV::TLVReader & aReader)
 
     VerifyOrExit(chip::TLV::kTLVType_Structure == mReader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
 
-    // This is just a dummy, as we're not going to exit this container ever
-    chip::TLV::TLVType OuterContainerType;
-    err = mReader.EnterContainer(OuterContainerType);
+    err = mReader.EnterContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
@@ -59,7 +59,6 @@ CHIP_ERROR ReportData::Parser::CheckSchemaValidity() const
     CHIP_ERROR err           = CHIP_NO_ERROR;
     uint16_t TagPresenceMask = 0;
     chip::TLV::TLVReader reader;
-    AttributeStatusList::Parser attributeStatusList;
     AttributeDataList::Parser attributeDataList;
     EventList::Parser eventList;
 
@@ -98,22 +97,6 @@ CHIP_ERROR ReportData::Parser::CheckSchemaValidity() const
                 err = reader.Get(subscriptionId);
                 SuccessOrExit(err);
                 PRETTY_PRINT("\tSubscriptionId = 0x%" PRIx64 ",", subscriptionId);
-            }
-#endif // CHIP_DETAIL_LOGGING
-            break;
-        case kCsTag_AttributeStatusList:
-            // check if this tag has appeared before
-            VerifyOrExit(!(TagPresenceMask & (1 << kCsTag_AttributeStatusList)), err = CHIP_ERROR_INVALID_TLV_TAG);
-            TagPresenceMask |= (1 << kCsTag_AttributeStatusList);
-            VerifyOrExit(chip::TLV::kTLVType_Array == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
-#if CHIP_DETAIL_LOGGING
-            {
-                attributeStatusList.Init(reader);
-
-                PRETTY_PRINT_INCDEPTH();
-                err = attributeStatusList.CheckSchemaValidity();
-                SuccessOrExit(err);
-                PRETTY_PRINT_DECDEPTH();
             }
 #endif // CHIP_DETAIL_LOGGING
             break;
@@ -174,6 +157,8 @@ CHIP_ERROR ReportData::Parser::CheckSchemaValidity() const
     {
         err = CHIP_NO_ERROR;
     }
+    SuccessOrExit(err);
+    err = reader.ExitContainer(mOuterContainerType);
 
 exit:
     ChipLogFunctError(err);
@@ -190,25 +175,6 @@ CHIP_ERROR ReportData::Parser::GetSuppressResponse(bool * const apSuppressRespon
 CHIP_ERROR ReportData::Parser::GetSubscriptionId(uint64_t * const apSubscriptionId) const
 {
     return GetUnsignedInteger(kCsTag_SubscriptionId, apSubscriptionId);
-}
-
-CHIP_ERROR ReportData::Parser::GetAttributeStatusList(AttributeStatusList::Parser * const apAttributeStatusList) const
-{
-    CHIP_ERROR err = CHIP_NO_ERROR;
-    chip::TLV::TLVReader reader;
-
-    err = mReader.FindElementWithTag(chip::TLV::ContextTag(kCsTag_AttributeStatusList), reader);
-    SuccessOrExit(err);
-
-    VerifyOrExit(chip::TLV::kTLVType_Array == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
-
-    err = apAttributeStatusList->Init(reader);
-    SuccessOrExit(err);
-
-exit:
-    ChipLogIfFalse((CHIP_NO_ERROR == err) || (CHIP_END_OF_TLV == err));
-
-    return err;
 }
 
 CHIP_ERROR ReportData::Parser::GetAttributeDataList(AttributeDataList::Parser * const apAttributeDataList) const
@@ -273,60 +239,52 @@ exit:
 ReportData::Builder & ReportData::Builder::SubscriptionId(const uint64_t aSubscriptionId)
 {
     // skip if error has already been set
-    SuccessOrExit(mError);
-
-    mError = mpWriter->Put(chip::TLV::ContextTag(kCsTag_SubscriptionId), aSubscriptionId);
-    ChipLogFunctError(mError);
-
-exit:
+    if (mError == CHIP_NO_ERROR)
+    {
+        mError = mpWriter->Put(chip::TLV::ContextTag(kCsTag_SubscriptionId), aSubscriptionId);
+        ChipLogFunctError(mError);
+    }
     return *this;
-}
-
-AttributeStatusList::Builder & ReportData::Builder::CreateAttributeStatusListBuilder()
-{
-    // skip if error has already been set
-    VerifyOrExit(CHIP_NO_ERROR == mError, mAttributeStatusListBuilder.ResetError(mError));
-
-    mError = mAttributeStatusListBuilder.Init(mpWriter, kCsTag_AttributeStatusList);
-    ChipLogFunctError(mError);
-
-exit:
-    return mAttributeStatusListBuilder;
 }
 
 AttributeDataList::Builder & ReportData::Builder::CreateAttributeDataListBuilder()
 {
     // skip if error has already been set
-    VerifyOrExit(CHIP_NO_ERROR == mError, mAttributeDataListBuilder.ResetError(mError));
-
-    mError = mAttributeDataListBuilder.Init(mpWriter, kCsTag_AttributeDataList);
-    ChipLogFunctError(mError);
-
-exit:
+    if (mError == CHIP_NO_ERROR)
+    {
+        mError = mAttributeDataListBuilder.Init(mpWriter, kCsTag_AttributeDataList);
+        ChipLogFunctError(mError);
+    }
+    else
+    {
+        mAttributeDataListBuilder.ResetError(mError);
+    }
     return mAttributeDataListBuilder;
 }
 
 EventList::Builder & ReportData::Builder::CreateEventDataListBuilder()
 {
     // skip if error has already been set
-    VerifyOrExit(CHIP_NO_ERROR == mError, mAttributeDataListBuilder.ResetError(mError));
-
-    mError = mEventDataListBuilder.Init(mpWriter, kCsTag_EventDataList);
-    ChipLogFunctError(mError);
-
-exit:
+    if (mError == CHIP_NO_ERROR)
+    {
+        mError = mEventDataListBuilder.Init(mpWriter, kCsTag_EventDataList);
+        ChipLogFunctError(mError);
+    }
+    else
+    {
+        mAttributeDataListBuilder.ResetError(mError);
+    }
     return mEventDataListBuilder;
 }
 
 ReportData::Builder & ReportData::Builder::MoreChunkedMessages(const bool aMoreChunkedMessages)
 {
     // skip if error has already been set
-    SuccessOrExit(mError);
-
-    mError = mpWriter->PutBoolean(chip::TLV::ContextTag(kCsTag_MoreChunkedMessages), aMoreChunkedMessages);
-    ChipLogFunctError(mError);
-
-exit:
+    if (mError == CHIP_NO_ERROR)
+    {
+        mError = mpWriter->PutBoolean(chip::TLV::ContextTag(kCsTag_MoreChunkedMessages), aMoreChunkedMessages);
+        ChipLogFunctError(mError);
+    }
     return *this;
 }
 

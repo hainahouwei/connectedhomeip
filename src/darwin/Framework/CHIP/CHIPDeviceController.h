@@ -20,9 +20,13 @@
 
 #import <Foundation/Foundation.h>
 
+#import <CHIP/CHIPOnboardingPayloadParser.h>
+
 @class CHIPDevice;
 
 NS_ASSUME_NONNULL_BEGIN
+
+typedef void (^CHIPDeviceConnectionCallback)(CHIPDevice * _Nullable device, NSError * _Nullable error);
 
 @protocol CHIPDevicePairingDelegate;
 @protocol CHIPPersistentStorageDelegate;
@@ -34,13 +38,36 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)pairDevice:(uint64_t)deviceID
      discriminator:(uint16_t)discriminator
       setupPINCode:(uint32_t)setupPINCode
+          csrNonce:(nullable NSData *)csrNonce
              error:(NSError * __autoreleasing *)error;
+
+- (BOOL)pairDevice:(uint64_t)deviceID
+           address:(NSString *)address
+              port:(uint16_t)port
+     discriminator:(uint16_t)discriminator
+      setupPINCode:(uint32_t)setupPINCode
+             error:(NSError * __autoreleasing *)error;
+
+- (BOOL)pairDeviceWithoutSecurity:(uint64_t)deviceID
+                          address:(NSString *)address
+                             port:(uint16_t)port
+                            error:(NSError * __autoreleasing *)error;
+
+- (BOOL)pairDevice:(uint64_t)deviceID
+        onboardingPayload:(NSString *)onboardingPayload
+    onboardingPayloadType:(CHIPOnboardingPayloadType)onboardingPayloadType
+                    error:(NSError * __autoreleasing *)error;
+
+- (void)setListenPort:(uint16_t)port;
 - (BOOL)unpairDevice:(uint64_t)deviceID error:(NSError * __autoreleasing *)error;
 - (BOOL)stopDevicePairing:(uint64_t)deviceID error:(NSError * __autoreleasing *)error;
-- (void)sendWiFiCredentials:(NSString *)ssid password:(NSString *)password;
-- (void)sendThreadCredentials:(NSData *)threadDataSet;
+- (void)updateDevice:(uint64_t)deviceID fabricId:(uint64_t)fabricId;
 
-- (CHIPDevice *)getPairedDevice:(uint64_t)deviceID error:(NSError * __autoreleasing *)error;
+- (BOOL)isDevicePaired:(uint64_t)deviceID error:(NSError * __autoreleasing *)error;
+- (BOOL)getConnectedDevice:(uint64_t)deviceID
+                     queue:(dispatch_queue_t)queue
+         completionHandler:(CHIPDeviceConnectionCallback)completionHandler;
+- (nullable CHIPDevice *)getPairedDevice:(uint64_t)deviceID error:(NSError * __autoreleasing *)error;
 
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new NS_UNAVAILABLE;
@@ -69,10 +96,9 @@ NS_ASSUME_NONNULL_BEGIN
  * check if the stack needs to be started up.
  *
  * @param[in] storageDelegate The delegate for persistent storage
- *
- * @param[in] queue The queue on which the storage callbacks will be delivered
+ * @param[in] vendorId The vendor ID of the commissioner application
  */
-- (BOOL)startup:(id<CHIPPersistentStorageDelegate>)storageDelegate queue:(dispatch_queue_t)queue;
+- (BOOL)startup:(nullable id<CHIPPersistentStorageDelegate>)storageDelegate vendorId:(uint16_t)vendorId;
 
 /**
  * Shutdown the CHIP Stack. Repeated calls to shutdown without calls to startup in between are NO-OPs.

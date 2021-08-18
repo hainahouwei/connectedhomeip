@@ -22,9 +22,11 @@
  *
  */
 
+#include <app/AppBuildConfig.h>
 #include <app/InteractionModelEngine.h>
 #include <app/MessageDef/EventPath.h>
 #include <app/ReadHandler.h>
+#include <app/reporting/Engine.h>
 
 namespace chip {
 namespace app {
@@ -32,13 +34,12 @@ CHIP_ERROR ReadHandler::Init(InteractionModelDelegate * apDelegate)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     // Error if already initialized.
-    VerifyOrExit(apDelegate != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
     VerifyOrExit(mpExchangeCtx == nullptr, err = CHIP_ERROR_INCORRECT_STATE);
-
-    mpExchangeCtx     = nullptr;
-    mpDelegate        = apDelegate;
-    mSuppressResponse = true;
-    mGetToAllEvents   = true;
+    mpExchangeCtx              = nullptr;
+    mSuppressResponse          = true;
+    mpAttributeClusterInfoList = nullptr;
+    mpEventClusterInfoList     = nullptr;
+    mCurrentPriority           = PriorityLevel::Invalid;
     MoveToState(HandlerState::Initialized);
 
 exit:
@@ -48,33 +49,23 @@ exit:
 
 void ReadHandler::Shutdown()
 {
-    ClearExistingExchangeContext();
+    InteractionModelEngine::GetInstance()->ReleaseClusterInfoList(mpAttributeClusterInfoList);
+    InteractionModelEngine::GetInstance()->ReleaseClusterInfoList(mpEventClusterInfoList);
+    mpExchangeCtx = nullptr;
     MoveToState(HandlerState::Uninitialized);
-    mpDelegate = nullptr;
+    mpAttributeClusterInfoList = nullptr;
+    mpEventClusterInfoList     = nullptr;
+    mCurrentPriority           = PriorityLevel::Invalid;
 }
 
-CHIP_ERROR ReadHandler::ClearExistingExchangeContext()
-{
-    if (mpExchangeCtx != nullptr)
-    {
-        mpExchangeCtx->Abort();
-        mpExchangeCtx = nullptr;
-    }
-
-    return CHIP_NO_ERROR;
-}
-
-CHIP_ERROR ReadHandler::OnReadRequest(Messaging::ExchangeContext * apExchangeContext, System::PacketBufferHandle aPayload)
+CHIP_ERROR ReadHandler::OnReadRequest(Messaging::ExchangeContext * apExchangeContext, System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     System::PacketBufferHandle response;
 
     mpExchangeCtx = apExchangeContext;
+    err           = ProcessReadRequest(std::move(aPayload));
 
-    err = ProcessReadRequest(std::move(aPayload));
-    SuccessOrExit(err);
-
-exit:
     if (err != CHIP_NO_ERROR)
     {
         ChipLogFunctError(err);
@@ -84,29 +75,32 @@ exit:
     return err;
 }
 
-CHIP_ERROR ReadHandler::SendReportData(System::PacketBufferHandle aPayload)
+CHIP_ERROR ReadHandler::SendReportData(System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     VerifyOrExit(mpExchangeCtx != nullptr, err = CHIP_ERROR_INCORRECT_STATE);
 
-    err = mpExchangeCtx->SendMessage(Protocols::InteractionModel::MsgType::ReportData, std::move(aPayload),
-                                     Messaging::SendFlags(Messaging::SendMessageFlags::kNone));
-    SuccessOrExit(err);
+    err = mpExchangeCtx->SendMessage(Protocols::InteractionModel::MsgType::ReportData, std::move(aPayload));
 
-    // Todo: Once status report support is added, we would shutdown only when there is error or when this is last chunk of report
+    if (err != CHIP_NO_ERROR)
+    {
+        mpExchangeCtx->Close();
+    }
+
 exit:
+    ChipLogFunctError(err);
     Shutdown();
     return err;
 }
 
-CHIP_ERROR ReadHandler::ProcessReadRequest(System::PacketBufferHandle aPayload)
+CHIP_ERROR ReadHandler::ProcessReadRequest(System::PacketBufferHandle && aPayload)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     System::PacketBufferTLVReader reader;
 
     ReadRequest::Parser readRequestParser;
     EventPathList::Parser eventPathListParser;
-    TLV::TLVReader eventPathListReader;
+    AttributePathList::Parser attributePathListParser;
 
     reader.Init(std::move(aPayload));
 
@@ -115,10 +109,22 @@ CHIP_ERROR ReadHandler::ProcessReadRequest(System::PacketBufferHandle aPayload)
 
     err = readRequestParser.Init(reader);
     SuccessOrExit(err);
-
+#if CHIP_CONFIG_IM_ENABLE_SCHEMA_CHECK
     err = readRequestParser.CheckSchemaValidity();
     SuccessOrExit(err);
+#endif
 
+    err = readRequestParser.GetAttributePathList(&attributePathListParser);
+    if (err == CHIP_END_OF_TLV)
+    {
+        err = CHIP_NO_ERROR;
+    }
+    else
+    {
+        SuccessOrExit(err);
+        err = ProcessAttributePathList(attributePathListParser);
+    }
+    SuccessOrExit(err);
     err = readRequestParser.GetEventPathList(&eventPathListParser);
     if (err == CHIP_END_OF_TLV)
     {
@@ -127,18 +133,126 @@ CHIP_ERROR ReadHandler::ProcessReadRequest(System::PacketBufferHandle aPayload)
     else
     {
         SuccessOrExit(err);
-        eventPathListParser.GetReader(&eventPathListReader);
+        err = ProcessEventPathList(eventPathListParser);
+    }
+    SuccessOrExit(err);
 
-        while (CHIP_NO_ERROR == (err = eventPathListReader.Next()))
+    // if we have exhausted this container
+    if (CHIP_END_OF_TLV == err)
+    {
+        err = CHIP_NO_ERROR;
+    }
+
+    MoveToState(HandlerState::Reportable);
+
+    err = InteractionModelEngine::GetInstance()->GetReportingEngine().ScheduleRun();
+    SuccessOrExit(err);
+
+    // mpExchangeCtx can be null here due to
+    // https://github.com/project-chip/connectedhomeip/issues/8031
+    if (mpExchangeCtx)
+    {
+        mpExchangeCtx->WillSendMessage();
+    }
+
+    // There must be no code after the WillSendMessage() call that can cause
+    // this method to return a failure.
+
+exit:
+    ChipLogFunctError(err);
+    return err;
+}
+
+CHIP_ERROR ReadHandler::ProcessAttributePathList(AttributePathList::Parser & aAttributePathListParser)
+{
+    CHIP_ERROR err = CHIP_NO_ERROR;
+    TLV::TLVReader reader;
+    aAttributePathListParser.GetReader(&reader);
+
+    while (CHIP_NO_ERROR == (err = reader.Next()))
+    {
+        VerifyOrExit(TLV::AnonymousTag == reader.GetTag(), err = CHIP_ERROR_INVALID_TLV_TAG);
+        VerifyOrExit(TLV::kTLVType_List == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
+        ClusterInfo clusterInfo;
+        AttributePath::Parser path;
+        err = path.Init(reader);
+        SuccessOrExit(err);
+        err = path.GetNodeId(&(clusterInfo.mNodeId));
+        SuccessOrExit(err);
+        err = path.GetEndpointId(&(clusterInfo.mEndpointId));
+        SuccessOrExit(err);
+        err = path.GetClusterId(&(clusterInfo.mClusterId));
+        SuccessOrExit(err);
+        err = path.GetFieldId(&(clusterInfo.mFieldId));
+        if (CHIP_NO_ERROR == err)
         {
-            VerifyOrExit(TLV::AnonymousTag == eventPathListReader.GetTag(), err = CHIP_ERROR_INVALID_TLV_TAG);
-
-            EventPath::Parser eventPath;
-
-            err = eventPath.Init(eventPathListReader);
-            SuccessOrExit(err);
-            // TODO: Pass event path to report engine to generate report with interested events
+            clusterInfo.mFlags.Set(ClusterInfo::Flags::kFieldIdValid);
         }
+        else if (CHIP_END_OF_TLV == err)
+        {
+            err = CHIP_NO_ERROR;
+        }
+        SuccessOrExit(err);
+
+        err = path.GetListIndex(&(clusterInfo.mListIndex));
+        if (CHIP_NO_ERROR == err)
+        {
+            VerifyOrExit(clusterInfo.mFlags.Has(ClusterInfo::Flags::kFieldIdValid), err = CHIP_ERROR_IM_MALFORMED_ATTRIBUTE_PATH);
+            clusterInfo.mFlags.Set(ClusterInfo::Flags::kListIndexValid);
+        }
+        else if (CHIP_END_OF_TLV == err)
+        {
+            err = CHIP_NO_ERROR;
+        }
+        SuccessOrExit(err);
+
+        err = InteractionModelEngine::GetInstance()->PushFront(mpAttributeClusterInfoList, clusterInfo);
+        SuccessOrExit(err);
+        mpAttributeClusterInfoList->SetDirty();
+    }
+    // if we have exhausted this container
+    if (CHIP_END_OF_TLV == err)
+    {
+        err = CHIP_NO_ERROR;
+    }
+
+exit:
+    ChipLogFunctError(err);
+    return err;
+}
+
+CHIP_ERROR ReadHandler::ProcessEventPathList(EventPathList::Parser & aEventPathListParser)
+{
+    CHIP_ERROR err = CHIP_NO_ERROR;
+    TLV::TLVReader reader;
+    aEventPathListParser.GetReader(&reader);
+
+    while (CHIP_NO_ERROR == (err = reader.Next()))
+    {
+        VerifyOrExit(TLV::AnonymousTag == reader.GetTag(), err = CHIP_ERROR_INVALID_TLV_TAG);
+        VerifyOrExit(TLV::kTLVType_List == reader.GetType(), err = CHIP_ERROR_WRONG_TLV_TYPE);
+        ClusterInfo clusterInfo;
+        EventPath::Parser path;
+        err = path.Init(reader);
+        SuccessOrExit(err);
+        err = path.GetNodeId(&(clusterInfo.mNodeId));
+        SuccessOrExit(err);
+        err = path.GetEndpointId(&(clusterInfo.mEndpointId));
+        SuccessOrExit(err);
+        err = path.GetClusterId(&(clusterInfo.mClusterId));
+        SuccessOrExit(err);
+        err = path.GetEventId(&(clusterInfo.mEventId));
+        if (CHIP_NO_ERROR == err)
+        {
+            clusterInfo.mFlags.Set(ClusterInfo::Flags::kEventIdValid);
+        }
+        else if (CHIP_END_OF_TLV == err)
+        {
+            err = CHIP_NO_ERROR;
+        }
+        SuccessOrExit(err);
+        err = InteractionModelEngine::GetInstance()->PushFront(mpEventClusterInfoList, clusterInfo);
+        SuccessOrExit(err);
     }
 
     // if we have exhausted this container
@@ -176,5 +290,47 @@ void ReadHandler::MoveToState(const HandlerState aTargetState)
     ChipLogDetail(DataManagement, "IM RH moving to [%s]", GetStateStr());
 }
 
+bool ReadHandler::CheckEventClean(EventManagement & aEventManager)
+{
+    if (mCurrentPriority == PriorityLevel::Invalid)
+    {
+        // Upload is not in middle, previous mLastScheduledEventNumber is not valid, Check for new events from Critical high
+        // priority to Debug low priority, and set a checkpoint when there is dirty events
+        for (int index = ArraySize(mSelfProcessedEvents) - 1; index >= 0; index--)
+        {
+            EventNumber lastEventNumber = aEventManager.GetLastEventNumber(static_cast<PriorityLevel>(index));
+            if ((lastEventNumber != 0) && (lastEventNumber >= mSelfProcessedEvents[index]))
+            {
+                // We have more events. snapshot last event IDs
+                aEventManager.SetScheduledEventEndpoint(&(mLastScheduledEventNumber[0]));
+                // initialize the next dirty priority level to transfer
+                MoveToNextScheduledDirtyPriority();
+                return false;
+            }
+        }
+        return true;
+    }
+    else
+    {
+        // Upload is in middle, previous mLastScheduledEventNumber is still valid, recheck via MoveToNextScheduledDirtyPriority,
+        // if finally mCurrentPriority is invalid, it means no more event
+        MoveToNextScheduledDirtyPriority();
+        return mCurrentPriority == PriorityLevel::Invalid;
+    }
+}
+
+void ReadHandler::MoveToNextScheduledDirtyPriority()
+{
+    for (int i = ArraySize(mSelfProcessedEvents) - 1; i >= 0; i--)
+    {
+        if ((mLastScheduledEventNumber[i] != 0) && mSelfProcessedEvents[i] <= mLastScheduledEventNumber[i])
+        {
+            mCurrentPriority = static_cast<PriorityLevel>(i);
+            return;
+        }
+    }
+
+    mCurrentPriority = PriorityLevel::Invalid;
+}
 } // namespace app
 } // namespace chip

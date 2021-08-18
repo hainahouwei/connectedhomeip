@@ -16,27 +16,27 @@
 #
 #
 # (Uses default behaviour of compiling all source files in directory, adding 'include' to include path.)
-# The list of src and include dirs must be in sync with that in temperature-measurement-app/esp32/main/component.mk
 idf_component_register(PRIV_INCLUDE_DIRS 
                       "${CMAKE_CURRENT_LIST_DIR}"
-                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app"
-                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/util"
-                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/reporting"
-                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/server"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/third_party/nlio/repo/include"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src"
                       "${CMAKE_CURRENT_LIST_DIR}/include"
                       SRC_DIRS
                       "${CMAKE_CURRENT_LIST_DIR}"
                       "${CMAKE_CURRENT_LIST_DIR}/gen"
+                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/common/gen/attributes"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/server"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/util"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/reporting"
+                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/administrator-commissioning-server"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/basic"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/bindings"
+                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/diagnostic-logs-server"
+                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/general-commissioning-server"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/network-commissioning"
+                      "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/operational-credentials-server"
                       "${CMAKE_SOURCE_DIR}/third_party/connectedhomeip/src/app/clusters/temperature-measurement-server"
-                      PRIV_REQUIRES chip QRCode tft spidriver bt screen-framework)
+                      PRIV_REQUIRES chip QRCode bt)
 
 set_property(TARGET ${COMPONENT_LIB} PROPERTY CXX_STANDARD 14) 
 target_compile_options(${COMPONENT_LIB} PRIVATE "-DLWIP_IPV6_SCOPES=0" "-DCHIP_HAVE_CONFIG_H")

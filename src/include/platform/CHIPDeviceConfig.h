@@ -119,6 +119,15 @@
 // -------------------- Device Identification Configuration --------------------
 
 /**
+ * CHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME
+ *
+ * Human readable vendor name for the organization responsible for producing the device.
+ */
+#ifndef CHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME
+#define CHIP_DEVICE_CONFIG_DEVICE_VENDOR_NAME "TEST_VENDOR"
+#endif
+
+/**
  * CHIP_DEVICE_CONFIG_DEVICE_VENDOR_ID
  *
  * The CHIP-assigned vendor id for the organization responsible for producing the device.
@@ -128,13 +137,12 @@
 #endif
 
 /**
- * CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER
+ * CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME
  *
- * Enables the use of a hard-coded default serial number if none
- * is found in Chip NV storage.
+ * Human readable name of the device model.
  */
-#ifndef CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER
-#define CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER "TEST_SN"
+#ifndef CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME
+#define CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_NAME "TEST_PRODUCT"
 #endif
 
 /**
@@ -145,6 +153,15 @@
  */
 #ifndef CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_ID
 #define CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_ID 65279
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_DEVICE_PRODUCT_REVISION_STRING
+ *
+ * Human readable string identifying version of the product assigned by the device vendor.
+ */
+#ifndef CHIP_DEVICE_CONFIG_DEFAULT_DEVICE_PRODUCT_REVISION_STRING
+#define CHIP_DEVICE_CONFIG_DEFAULT_DEVICE_PRODUCT_REVISION_STRING "TEST_VERSION"
 #endif
 
 /**
@@ -161,16 +178,35 @@
  * persistent storage (e.g. by a factory provisioning process).
  */
 #ifndef CHIP_DEVICE_CONFIG_DEFAULT_DEVICE_PRODUCT_REVISION
-#define CHIP_DEVICE_CONFIG_DEFAULT_DEVICE_PRODUCT_REVISION 1
+#define CHIP_DEVICE_CONFIG_DEFAULT_DEVICE_PRODUCT_REVISION 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION_STRING
+ *
+ * A string identifying the firmware revision running on the device.
+ */
+#ifndef CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION_STRING
+#define CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION_STRING "prerelease"
 #endif
 
 /**
  * CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION
  *
- * A string identifying the firmware revision running on the device.
+ * A monothonic number identifying the firmware revision running on the device.
  */
 #ifndef CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION
-#define CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION "prerelease"
+#define CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER
+ *
+ * Enables the use of a hard-coded default serial number if none
+ * is found in Chip NV storage.
+ */
+#ifndef CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER
+#define CHIP_DEVICE_CONFIG_TEST_SERIAL_NUMBER "TEST_SN"
 #endif
 
 /**
@@ -271,7 +307,7 @@
  * consists of the final two bytes of the device's primary WiFi MAC address in hex.
  */
 #ifndef CHIP_DEVICE_CONFIG_WIFI_AP_SSID_PREFIX
-#define CHIP_DEVICE_CONFIG_WIFI_AP_SSID_PREFIX "CHIP-"
+#define CHIP_DEVICE_CONFIG_WIFI_AP_SSID_PREFIX "MATTER-"
 #endif
 
 /**
@@ -388,7 +424,7 @@
  * may need to be shorter.
  */
 #ifndef CHIP_DEVICE_CONFIG_BLE_DEVICE_NAME_PREFIX
-#define CHIP_DEVICE_CONFIG_BLE_DEVICE_NAME_PREFIX "CHIP-"
+#define CHIP_DEVICE_CONFIG_BLE_DEVICE_NAME_PREFIX "MATTER-"
 #endif
 
 /**
@@ -572,26 +608,6 @@
 #define CHIP_DEVICE_CONFIG_ENABLE_JUST_IN_TIME_PROVISIONING 0
 #endif
 
-// -------------------- Service Discovery Configuration -----------------------
-
-/**
- * CHIP_DEVICE_CONFIG_ENABLE_MDNS
- *
- * Enable support to use MDNS for service advertising and discovery in CHIP.
- */
-#ifndef CHIP_DEVICE_CONFIG_ENABLE_MDNS
-#define CHIP_DEVICE_CONFIG_ENABLE_MDNS 0
-#endif
-
-/**
- * CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT
- *
- * Enable support to DNS-SD SRP client usage for service advertising and discovery in CHIP.
- */
-#ifndef CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT
-#define CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT 0
-#endif
-
 // -------------------- Thread Configuration --------------------
 
 /**
@@ -674,6 +690,51 @@
  */
 #ifndef CHIP_DEVICE_CONFIG_THREAD_CONNECTIVITY_TIMEOUT
 #define CHIP_DEVICE_CONFIG_THREAD_CONNECTIVITY_TIMEOUT 30000
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_THREAD_ENABLE_CLI
+ *
+ * Enable Thread CLI interface at initialisation.
+ */
+#ifndef CHIP_DEVICE_CONFIG_THREAD_ENABLE_CLI
+#define CHIP_DEVICE_CONFIG_THREAD_ENABLE_CLI 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT
+ *
+ * Enable support to DNS-SD SRP client usage for service advertising and discovery in CHIP.
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT
+#define CHIP_DEVICE_CONFIG_ENABLE_THREAD_SRP_CLIENT 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_THREAD_SRP_MAX_SERVICES
+ *
+ * Amount of services available for advertising using SRP.
+ */
+#ifndef CHIP_DEVICE_CONFIG_THREAD_SRP_MAX_SERVICES
+#define CHIP_DEVICE_CONFIG_THREAD_SRP_MAX_SERVICES 3
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_THREAD_COMMISSIONABLE_DISCOVERY
+ *
+ * Enable support to Commissionable Discovery for Thread devices.
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_THREAD_COMMISSIONABLE_DISCOVERY
+#define CHIP_DEVICE_CONFIG_ENABLE_THREAD_COMMISSIONABLE_DISCOVERY 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_THREAD_DNS_CLIENT
+ *
+ * Enable support to DNS client usage for resolving and browsing services in CHIP.
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_THREAD_DNS_CLIENT
+#define CHIP_DEVICE_CONFIG_ENABLE_THREAD_DNS_CLIENT 0
 #endif
 
 // -------------------- Trait Manager Configuration --------------------
@@ -1007,4 +1068,187 @@
  */
 #ifndef CHIP_DEVICE_CONFIG_FIRMWARE_BUILD_TIME
 #define CHIP_DEVICE_CONFIG_FIRMWARE_BUILD_TIME __TIME__
+#endif
+
+// -------------------- Device DNS-SD Configuration --------------------
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_MDNS
+ *
+ * Enable support to use MDNS for service advertising and discovery in CHIP.
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_MDNS
+#define CHIP_DEVICE_CONFIG_ENABLE_MDNS 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_UNPROVISIONED_MDNS
+ *
+ * Enable MDNS commissionable node advertising when not yet provisioned.
+ *
+ * This should be 1 for WiFi SoftAP devices, ethernet devices, and (probably) bridge devices
+ *
+ * This should be 0 for Thread/BLE devices and WiFi/BLE devices
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_UNPROVISIONED_MDNS
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+#define CHIP_DEVICE_CONFIG_ENABLE_UNPROVISIONED_MDNS 0
+#else
+#define CHIP_DEVICE_CONFIG_ENABLE_UNPROVISIONED_MDNS 1
+#endif
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_MAX_DISCOVERED_NODES
+ *
+ * Maximum number of CHIP Commissioners or Commissionable Nodes that can be discovered
+ */
+#ifndef CHIP_DEVICE_CONFIG_MAX_DISCOVERED_NODES
+#define CHIP_DEVICE_CONFIG_MAX_DISCOVERED_NODES 10
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY
+ *
+ * Enable or disable whether this device advertises as a commissioner.
+ *
+ * Depends upon CHIP_DEVICE_CONFIG_ENABLE_BOTH_COMMISSIONER_AND_COMMISSIONEE set to 1
+ *
+ * For Video Players, this value will be 1
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY
+#define CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_BOTH_COMMISSIONER_AND_COMMISSIONEE
+ *
+ * Enable including commissioner code (CHIPDeviceController.cpp) in the commissionee (Server.cpp) code.
+ *
+ * For Video Players, this value will be 1
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_BOTH_COMMISSIONER_AND_COMMISSIONEE
+#define CHIP_DEVICE_CONFIG_ENABLE_BOTH_COMMISSIONER_AND_COMMISSIONEE 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY_CLIENT
+ *
+ * Enable or disable whether this device will attempt to
+ * discover commissioners and send Uder Directed Commissioning
+ * messages to them.
+ *
+ * For Video Player Clients, this value will be 1
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY_CLIENT
+#define CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY_CLIENT 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_EXTENDED_DISCOVERY
+ *
+ * Enable or disable whether this device advertises when not in commissioning mode.
+ *
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_EXTENDED_DISCOVERY
+#define CHIP_DEVICE_CONFIG_ENABLE_EXTENDED_DISCOVERY 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_TYPE
+ *
+ * Enable or disable including device type in commissionable node discovery.
+ *
+ * For Video Players, this value will often be 1
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_TYPE
+#define CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_TYPE 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_DEVICE_TYPE
+ *
+ * Type of device using the CHIP Device Type Identifier.
+ *
+ * Examples:
+ * 0xFFFF = 65535 = Invalid Device Type
+ * 0x0051 = 81 = Smart Plug
+ * 0x0022 = 34 = Speaker
+ * 0x0023 = 35 = Video Player
+ *
+ */
+#ifndef CHIP_DEVICE_CONFIG_DEVICE_TYPE
+#define CHIP_DEVICE_CONFIG_DEVICE_TYPE 65535 // 65535 = Invalid Device Type
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_NAME
+ *
+ * Enable or disable including device name in commissionable node discovery.
+ *
+ * For Video Players, this value will often be 1
+ */
+#ifndef CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_NAME
+#define CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONABLE_DEVICE_NAME 0
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_DEVICE_NAME
+ *
+ * Name of device.
+ */
+#ifndef CHIP_DEVICE_CONFIG_DEVICE_NAME
+#define CHIP_DEVICE_CONFIG_DEVICE_NAME "Test Kitchen"
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_PAIRING_INITIAL_HINT
+ *
+ * Pairing Hint, bitmap value of methods to put device into pairing mode
+ * when it has not yet been commissioned.
+ *
+ * Bits:
+ * 0 - Power Cycle
+ * 5 - See Device Manual
+ */
+#ifndef CHIP_DEVICE_CONFIG_PAIRING_INITIAL_HINT
+#define CHIP_DEVICE_CONFIG_PAIRING_INITIAL_HINT                                                                                    \
+    (1 << CHIP_COMMISSIONING_HINT_INDEX_POWER_CYCLE | 1 << CHIP_COMMISSIONING_HINT_INDEX_SEE_MANUAL)
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_PAIRING_INITIAL_INSTRUCTION
+ *
+ * Pairing Instruction, when device has not yet been commissioned
+ *
+ * Meaning is depedent upon pairing hint value.
+ */
+#ifndef CHIP_DEVICE_CONFIG_PAIRING_INITIAL_INSTRUCTION
+#define CHIP_DEVICE_CONFIG_PAIRING_INITIAL_INSTRUCTION ""
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_HINT
+ *
+ * Pairing Hint, bitmap value of methods to put device into pairing mode
+ * when it has already been commissioned.
+ *
+ * Bits:
+ * 2 - Visit Administrator UX (always true for secondary)
+ * 5 - See Device Manual
+ */
+#ifndef CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_HINT
+#define CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_HINT                                                                                  \
+    (1 << CHIP_COMMISSIONING_HINT_INDEX_SEE_ADMINISTRATOR_UX | 1 << CHIP_COMMISSIONING_HINT_INDEX_SEE_MANUAL)
+#endif
+
+/**
+ * CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_INSTRUCTION
+ *
+ * Pairing Instruction, when device has not yet been commissioned
+ *
+ * Meaning is depedent upon pairing hint value.
+ */
+#ifndef CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_INSTRUCTION
+#define CHIP_DEVICE_CONFIG_PAIRING_SECONDARY_INSTRUCTION ""
 #endif

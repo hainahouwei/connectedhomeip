@@ -15,28 +15,63 @@
 #    limitations under the License.
 #
 
-import sys
 import os
 from pathlib import Path
+import sys
+import subprocess
 
-# Check python version
-if sys.version_info[0] < 3:
-    print("Must use Python 3. Current version is " + str(sys.version_info[0]))
-    exit(1)
+CHIP_ROOT_DIR = os.path.realpath(
+    os.path.join(os.path.dirname(__file__), '../..'))
 
-# Check if we are in top of CHIP folder
-scripts_path = os.path.join(os.getcwd(), 'scripts/tools/zap_regen_all.py')
-if not os.path.exists(scripts_path):
-    print(os.getcwd())
-    print('This script must be called from the root of the chip directory')
-    exit(1)
 
-os.system("./scripts/tools/zap_generate_chip.sh")
+def checkPythonVersion():
+    if sys.version_info[0] < 3:
+        print('Must use Python 3. Current version is ' +
+              str(sys.version_info[0]))
+        exit(1)
 
-os.system("./scripts/tools/zap_generate_chip_tool.sh")
 
-for path in Path('./examples').rglob('*.zap'):
-    os.system("./scripts/tools/zap_generate.sh " + str(path))
+def getGlobalTemplatesTargets():
+    targets = []
+    targets.extend([[str(filepath)]
+                   for filepath in Path('./examples').rglob('*.zap')])
+    targets.extend([[str(filepath)]
+                   for filepath in Path('./src/darwin').rglob('*.zap')])
+    targets.extend([[str(filepath)] for filepath in Path(
+        './src/controller/data_model').rglob('*.zap')])
+    return targets
 
-for path in Path('./src/darwin').rglob('*.zap'):
-    os.system("./scripts/tools/zap_generate.sh " + str(path))
+
+def getSpecificTemplatesTargets():
+    targets = []
+    targets.append(['src/controller/data_model/controller-clusters.zap',
+                   '-t', 'src/app/common/templates/templates.json'])
+    targets.append(['src/controller/data_model/controller-clusters.zap',
+                   '-t', 'examples/chip-tool/templates/templates.json'])
+    targets.append(['src/controller/data_model/controller-clusters.zap',
+                   '-t', 'src/controller/python/templates/templates.json'])
+    targets.append(['src/controller/data_model/controller-clusters.zap',
+                   '-t', 'src/darwin/Framework/CHIP/templates/templates.json'])
+    targets.append(['src/controller/data_model/controller-clusters.zap',
+                   '-t', 'src/controller/java/templates/templates.json'])
+    return targets
+
+
+def getTargets():
+    targets = []
+    targets.extend(getGlobalTemplatesTargets())
+    targets.extend(getSpecificTemplatesTargets())
+    return targets
+
+
+def main():
+    checkPythonVersion()
+    os.chdir(CHIP_ROOT_DIR)
+
+    targets = getTargets()
+    for target in targets:
+        subprocess.check_call(['./scripts/tools/zap/generate.py'] + target)
+
+
+if __name__ == '__main__':
+    main()

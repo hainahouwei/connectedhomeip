@@ -81,7 +81,7 @@
         {
             "label": "Build Shell",
             "type": "shell",
-            "command": "scripts/examples/gn_build_example.sh examples/shell out/shell",
+            "command": "scripts/examples/gn_build_example.sh examples/shell/standalone out/shell",
             "group": "build",
             "problemMatcher": {
                 "base": "$gcc",
@@ -117,7 +117,7 @@
         {
             "label": "Build QPG6100 Lock Example",
             "type": "shell",
-            "command": "scripts/examples/gn_build_example.sh examples/lock-app/qpg6100 out/qpg6100_lock_app",
+            "command": "scripts/examples/gn_build_example.sh examples/lock-app/qpg out/qpg6100_lock_app qpg6100",
             "group": "build",
             "problemMatcher": {
                 "base": "$gcc",
@@ -130,7 +130,7 @@
         {
             "label": "Build EFR32 Lock Example",
             "type": "shell",
-            "command": "scripts/examples/gn_build_example.sh examples/lock-app/efr32 out/efr32_lock_app",
+            "command": "scripts/examples/gn_efr32_example.sh examples/lock-app/efr32 out/efr32_lock_app ${input:efr32_board}",
             "group": "build",
             "problemMatcher": {
                 "base": "$gcc",
@@ -143,7 +143,7 @@
         {
             "label": "Build EFR32 Light Example",
             "type": "shell",
-            "command": "scripts/examples/gn_build_example.sh examples/lighting-app/efr32 out/efr32_lighting_app",
+            "command": "scripts/examples/gn_efr32_example.sh examples/lighting-app/efr32 out/efr32_lighting_app ${input:efr32_board}",
             "group": "build",
             "problemMatcher": {
                 "base": "$gcc",
@@ -172,6 +172,12 @@
             "command": "scripts/examples/build-all-clusters-app.py",
             "group": "build",
             "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "QEMU: run esp32-qemu unit tests",
+            "type": "shell",
+            "command": "scripts/tests/esp32_qemu_tests.sh /tmp/test_logs",
+            "problemMatcher": []
         },
         {
             "label": "Build Android App",
@@ -270,6 +276,101 @@
                     "${workspaceFolder}/examples/shell/nrfconnect/build/nrf5340dk_nrf5340_cpuapp"
                 ]
             }
+        },
+        {
+            "label": "Build Telink Lighting Example (TLSR9518ADK80D)",
+            "type": "shell",
+            "command": "source scripts/activate.sh && scripts/examples/telink_example.sh lighting-app tlsr9518adk80d",
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}/examples/lighting-app/telink/build/tlsr9518adk80d"
+                ]
+            }
+        },
+        {
+            "label": "Run Mbed Application",
+            "type": "shell",
+            "command": "scripts/examples/mbed_example.sh",
+            "args": [
+                "-c=${input:mbedCommand}",
+                "-a=${input:mbedApp}",
+                "-b=${input:mbedTarget}",
+                "-p=${input:mbedProfile}"
+            ],
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}/examples/${input:mbedApp}/mbed/build"
+                ]
+            }
+        },
+        {
+            "label": "Run Mbed Unit Tests",
+            "type": "shell",
+            "command": "scripts/tests/mbed_tests.sh",
+            "args": [
+                "-c=${input:mbedCommand}",
+                "-b=${input:mbedTarget}",
+                "-p=${input:mbedProfile}"
+            ],
+            "group": "build",
+            "problemMatcher": {
+                "base": "$gcc",
+                "fileLocation": [
+                    "relative",
+                    "${workspaceFolder}/src/test_driver/mbed/build"
+                ]
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "type": "pickString",
+            "id": "mbedCommand",
+            "description": "What do you want to do?",
+            "options": ["build", "flash", "build-flash"],
+            "default": "build"
+        },
+        {
+            "type": "pickString",
+            "id": "mbedApp",
+            "description": "What mbed application do you want to use?",
+            "options": ["lock-app", "lighting-app"],
+            "default": "shell"
+        },
+        {
+            "type": "pickString",
+            "id": "mbedTarget",
+            "description": "What mbed target do you want to use?",
+            "options": ["CY8CPROTO_062_4343W"],
+            "default": "CY8CPROTO_062_4343W"
+        },
+        {
+            "type": "pickString",
+            "id": "mbedProfile",
+            "description": "What mbed profile do you want to use?",
+            "options": ["develop", "release", "debug"],
+            "default": "develop"
+        },
+        {
+            "id": "efr32_board",
+            "type": "pickString",
+            "description": "What's the type of your EFR32 board?",
+            "options": [
+                "BRD4304A",
+                "BRD4161A",
+                "BRD4163A",
+                "BRD4164A",
+                "BRD4166A",
+                "BRD4170A",
+                "BRD4180A"
+            ],
+            "default": "BRD4166A"
         }
     ]
 }

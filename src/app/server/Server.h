@@ -19,15 +19,26 @@
 
 #include <app/server/AppDelegate.h>
 #include <inet/InetConfig.h>
-#include <transport/AdminPairingTable.h>
+#include <messaging/ExchangeMgr.h>
+#include <protocols/secure_channel/PASESession.h>
+#include <transport/FabricTable.h>
+#include <transport/SecureSessionMgr.h>
 #include <transport/TransportMgr.h>
+#include <transport/raw/BLE.h>
 #include <transport/raw/UDP.h>
 
+constexpr size_t kMaxBlePendingPackets = 1;
+
+using DemoTransportMgr = chip::TransportMgr<chip::Transport::UDP
 #if INET_CONFIG_ENABLE_IPV4
-using DemoTransportMgr = chip::TransportMgr<chip::Transport::UDP, chip::Transport::UDP>;
-#else
-using DemoTransportMgr = chip::TransportMgr<chip::Transport::UDP>;
+                                            ,
+                                            chip::Transport::UDP
 #endif
+#if CONFIG_NETWORK_LAYER_BLE
+                                            ,
+                                            chip::Transport::BLE<kMaxBlePendingPackets>
+#endif
+                                            >;
 
 /**
  * Initialize DataModelHandler and start CHIP datamodel server, the server
@@ -37,21 +48,43 @@ using DemoTransportMgr = chip::TransportMgr<chip::Transport::UDP>;
  */
 void InitServer(AppDelegate * delegate = nullptr);
 
-CHIP_ERROR AddTestPairing();
+#if CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY_CLIENT
+CHIP_ERROR SendUserDirectedCommissioningRequest(chip::Transport::PeerAddress commissioner);
+#endif // CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY_CLIENT
 
-chip::Transport::AdminPairingTable & GetGlobalAdminPairingTable();
+CHIP_ERROR AddTestCommissioning();
+
+chip::Transport::FabricTable & GetGlobalFabricTable();
 
 namespace chip {
 
-enum class ResetAdmins
+enum class ResetFabrics
 {
     kYes,
     kNo,
 };
 
+enum class PairingWindowAdvertisement
+{
+    kBle,
+    kMdns,
+};
+
 } // namespace chip
+
+constexpr uint16_t kNoCommissioningTimeout = UINT16_MAX;
 
 /**
  * Open the pairing window using default configured parameters.
  */
-CHIP_ERROR OpenDefaultPairingWindow(chip::ResetAdmins resetAdmins);
+CHIP_ERROR
+OpenBasicCommissioningWindow(chip::ResetFabrics resetFabrics, uint16_t commissioningTimeoutSeconds = kNoCommissioningTimeout,
+                             chip::PairingWindowAdvertisement advertisementMode = chip::PairingWindowAdvertisement::kBle);
+
+CHIP_ERROR OpenEnhancedCommissioningWindow(uint16_t commissioningTimeoutSeconds, uint16_t discriminator,
+                                           chip::PASEVerifier & verifier, uint32_t iterations, chip::ByteSpan salt,
+                                           uint16_t passcodeID);
+
+void ClosePairingWindow();
+
+bool IsPairingWindowOpen();

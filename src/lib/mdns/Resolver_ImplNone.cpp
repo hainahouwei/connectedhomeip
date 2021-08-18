@@ -28,11 +28,15 @@ class NoneResolver : public Resolver
 public:
     CHIP_ERROR SetResolverDelegate(ResolverDelegate *) override { return CHIP_NO_ERROR; }
 
-    CHIP_ERROR ResolveNodeId(uint64_t nodeId, uint64_t fabricId, Inet::IPAddressType type) override
+    CHIP_ERROR StartResolver(chip::Inet::InetLayer * inetLayer, uint16_t port) override { return CHIP_NO_ERROR; }
+
+    CHIP_ERROR ResolveNodeId(const PeerId & peerId, Inet::IPAddressType type) override
     {
         ChipLogError(Discovery, "Failed to resolve node ID: mDNS resolving not available");
         return CHIP_ERROR_NOT_IMPLEMENTED;
     }
+    CHIP_ERROR FindCommissionableNodes(DiscoveryFilter filter = DiscoveryFilter()) override { return CHIP_ERROR_NOT_IMPLEMENTED; }
+    CHIP_ERROR FindCommissioners(DiscoveryFilter filter = DiscoveryFilter()) override { return CHIP_ERROR_NOT_IMPLEMENTED; }
 };
 
 NoneResolver gResolver;

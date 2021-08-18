@@ -24,8 +24,10 @@
  *
  */
 
+#include "MockEvents.h"
 #include <app/CommandHandler.h>
 #include <app/CommandSender.h>
+#include <app/EventManagement.h>
 #include <app/InteractionModelEngine.h>
 #include <app/tests/integration/common.h>
 #include <core/CHIPCore.h>
@@ -33,20 +35,27 @@
 #include <messaging/ExchangeMgr.h>
 #include <messaging/Flags.h>
 #include <platform/CHIPDeviceLayer.h>
+#include <protocols/secure_channel/PASESession.h>
 #include <support/ErrorStr.h>
 #include <system/SystemPacketBuffer.h>
-#include <transport/PASESession.h>
 #include <transport/SecureSessionMgr.h>
 #include <transport/raw/UDP.h>
 
 namespace chip {
 namespace app {
-void DispatchSingleClusterCommand(chip::ClusterId aClusterId, chip::CommandId aCommandId, chip::EndpointId aEndPointId,
-                                  chip::TLV::TLVReader & aReader, Command * apCommandObj)
-{
-    CHIP_ERROR err = CHIP_NO_ERROR;
 
-    if (aClusterId != kTestClusterId || aCommandId != kTestCommandId || aEndPointId != kTestEndPointId)
+bool ServerClusterCommandExists(chip::ClusterId aClusterId, chip::CommandId aCommandId, chip::EndpointId aEndPointId)
+{
+    // The Mock cluster catalog -- only have one command on one cluster on one endpoint.
+    return (aEndPointId == kTestEndpointId && aClusterId == kTestClusterId && aCommandId == kTestCommandId);
+}
+
+void DispatchSingleClusterCommand(chip::ClusterId aClusterId, chip::CommandId aCommandId, chip::EndpointId aEndPointId,
+                                  chip::TLV::TLVReader & aReader, CommandHandler * apCommandObj)
+{
+    static bool statusCodeFlipper = false;
+
+    if (aClusterId != kTestClusterId || aCommandId != kTestCommandId || aEndPointId != kTestEndpointId)
     {
         return;
     }
@@ -56,62 +65,111 @@ void DispatchSingleClusterCommand(chip::ClusterId aClusterId, chip::CommandId aC
         chip::TLV::Debug::Dump(aReader, TLVPrettyPrinter);
     }
 
-    chip::app::Command::CommandParams commandParams = { kTestEndPointId, // Endpoint
-                                                        kTestGroupId,    // GroupId
-                                                        kTestClusterId,  // ClusterId
-                                                        kTestCommandId,  // CommandId
-                                                        (chip::app::Command::CommandPathFlags::kEndpointIdValid) };
+    chip::app::CommandPathParams commandPathParams = { kTestEndpointId, // Endpoint
+                                                       kTestGroupId,    // GroupId
+                                                       kTestClusterId,  // ClusterId
+                                                       kTestCommandId,  // CommandId
+                                                       (chip::app::CommandPathFlags::kEndpointIdValid) };
 
     // Add command data here
+    if (statusCodeFlipper)
+    {
+        printf("responder constructing status code in command");
+        apCommandObj->AddStatusCode(commandPathParams, Protocols::SecureChannel::GeneralStatusCode::kSuccess,
+                                    Protocols::InteractionModel::Id, Protocols::InteractionModel::ProtocolCode::Success);
+    }
+    else
+    {
+        printf("responder constructing command data in command");
 
-    uint8_t effectIdentifier = 1; // Dying light
-    uint8_t effectVariant    = 1;
+        chip::TLV::TLVWriter * writer;
 
-    chip::TLV::TLVType dummyType = chip::TLV::kTLVType_NotSpecified;
+        ReturnOnFailure(apCommandObj->PrepareCommand(commandPathParams));
 
-    chip::TLV::TLVWriter writer = apCommandObj->CreateCommandDataElementTLVWriter();
+        writer = apCommandObj->GetCommandDataElementTLVWriter();
+        ReturnOnFailure(writer->Put(chip::TLV::ContextTag(kTestFieldId1), kTestFieldValue1));
 
-    printf("responder constructing response");
-    err = writer.StartContainer(chip::TLV::AnonymousTag, chip::TLV::kTLVType_Structure, dummyType);
+        ReturnOnFailure(writer->Put(chip::TLV::ContextTag(kTestFieldId2), kTestFieldValue2));
+
+        ReturnOnFailure(apCommandObj->FinishCommand());
+    }
+    statusCodeFlipper = !statusCodeFlipper;
+}
+
+void DispatchSingleClusterResponseCommand(chip::ClusterId aClusterId, chip::CommandId aCommandId, chip::EndpointId aEndPointId,
+                                          chip::TLV::TLVReader & aReader, CommandSender * apCommandObj)
+{
+    ChipLogDetail(Controller, "Received Cluster Command: Cluster=%" PRIx32 " Command=%" PRIx32 " Endpoint=%" PRIx16, aClusterId,
+                  aCommandId, aEndPointId);
+    // Nothing todo.
+}
+
+CHIP_ERROR ReadSingleClusterData(ClusterInfo & aClusterInfo, TLV::TLVWriter * apWriter, bool * apDataExists)
+{
+    CHIP_ERROR err   = CHIP_NO_ERROR;
+    uint64_t version = 0;
+    VerifyOrExit(aClusterInfo.mClusterId == kTestClusterId && aClusterInfo.mEndpointId == kTestEndpointId,
+                 err = CHIP_ERROR_INVALID_ARGUMENT);
+    VerifyOrExit(apWriter != nullptr, /* no op */);
+
+    err = apWriter->Put(TLV::ContextTag(AttributeDataElement::kCsTag_Data), kTestFieldValue1);
     SuccessOrExit(err);
-
-    err = writer.Put(chip::TLV::ContextTag(1), effectIdentifier);
-    SuccessOrExit(err);
-
-    err = writer.Put(chip::TLV::ContextTag(2), effectVariant);
-    SuccessOrExit(err);
-
-    err = writer.EndContainer(dummyType);
-    SuccessOrExit(err);
-
-    err = writer.Finalize();
-    SuccessOrExit(err);
-
-    err = apCommandObj->AddCommand(commandParams);
-    SuccessOrExit(err);
+    err = apWriter->Put(TLV::ContextTag(AttributeDataElement::kCsTag_DataVersion), version);
 
 exit:
-    return;
+    ChipLogFunctError(err);
+    return err;
+}
+
+CHIP_ERROR WriteSingleClusterData(ClusterInfo & aClusterInfo, TLV::TLVReader & aReader, WriteHandler * apWriteHandler)
+{
+    CHIP_ERROR err = CHIP_NO_ERROR;
+    AttributePathParams attributePathParams;
+    attributePathParams.mNodeId     = 1;
+    attributePathParams.mEndpointId = 2;
+    attributePathParams.mClusterId  = 3;
+    attributePathParams.mFieldId    = 4;
+    attributePathParams.mListIndex  = 5;
+    attributePathParams.mFlags.Set(AttributePathParams::Flags::kFieldIdValid);
+
+    err = apWriteHandler->AddAttributeStatusCode(attributePathParams, Protocols::SecureChannel::GeneralStatusCode::kSuccess,
+                                                 Protocols::SecureChannel::Id, Protocols::InteractionModel::ProtocolCode::Success);
+    ChipLogFunctError(err);
+    return err;
 }
 } // namespace app
 } // namespace chip
 
 namespace {
 chip::TransportMgr<chip::Transport::UDP> gTransportManager;
-chip::SecureSessionMgr gSessionManager;
 chip::SecurePairingUsingTestSecret gTestPairing;
+LivenessEventGenerator gLivenessGenerator;
 
+uint8_t gDebugEventBuffer[2048];
+uint8_t gInfoEventBuffer[2048];
+uint8_t gCritEventBuffer[2048];
+chip::app::CircularEventBuffer gCircularEventBuffer[3];
+
+void InitializeEventLogging(chip::Messaging::ExchangeManager * apMgr)
+{
+    chip::app::LogStorageResources logStorageResources[] = {
+        { &gCritEventBuffer[0], sizeof(gDebugEventBuffer), nullptr, 0, nullptr, chip::app::PriorityLevel::Debug },
+        { &gInfoEventBuffer[0], sizeof(gInfoEventBuffer), nullptr, 0, nullptr, chip::app::PriorityLevel::Info },
+        { &gDebugEventBuffer[0], sizeof(gCritEventBuffer), nullptr, 0, nullptr, chip::app::PriorityLevel::Critical },
+    };
+
+    chip::app::EventManagement::CreateEventManagement(apMgr, sizeof(logStorageResources) / sizeof(logStorageResources[0]),
+                                                      gCircularEventBuffer, logStorageResources);
+}
 } // namespace
 
 int main(int argc, char * argv[])
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
+    chip::app::InteractionModelDelegate mockDelegate;
     chip::Optional<chip::Transport::PeerAddress> peer(chip::Transport::Type::kUndefined);
-    const chip::Transport::AdminId gAdminId = 0;
-    chip::Transport::AdminPairingTable admins;
-    chip::Transport::AdminPairingInfo * adminInfo = admins.AssignAdminId(gAdminId, chip::kTestDeviceNodeId);
-
-    VerifyOrExit(adminInfo != nullptr, err = CHIP_ERROR_NO_MEMORY);
+    const chip::FabricIndex gFabricIndex = 0;
+    chip::Transport::FabricTable fabrics;
 
     InitializeChip();
 
@@ -119,24 +177,32 @@ int main(int argc, char * argv[])
         chip::Transport::UdpListenParameters(&chip::DeviceLayer::InetLayer).SetAddressType(chip::Inet::kIPAddressType_IPv4));
     SuccessOrExit(err);
 
-    err = gSessionManager.Init(chip::kTestDeviceNodeId, &chip::DeviceLayer::SystemLayer, &gTransportManager, &admins);
+    err = gSessionManager.Init(&chip::DeviceLayer::SystemLayer, &gTransportManager, &fabrics, &gMessageCounterManager);
     SuccessOrExit(err);
 
     err = gExchangeManager.Init(&gSessionManager);
     SuccessOrExit(err);
 
-    err = chip::app::InteractionModelEngine::GetInstance()->Init(&gExchangeManager, nullptr);
+    err = gMessageCounterManager.Init(&gExchangeManager);
     SuccessOrExit(err);
 
-    err = gSessionManager.NewPairing(peer, chip::kTestControllerNodeId, &gTestPairing,
-                                     chip::SecureSessionMgr::PairingDirection::kResponder, gAdminId);
+    err = chip::app::InteractionModelEngine::GetInstance()->Init(&gExchangeManager, &mockDelegate);
+    SuccessOrExit(err);
+
+    InitializeEventLogging(&gExchangeManager);
+
+    err = gSessionManager.NewPairing(peer, chip::kTestControllerNodeId, &gTestPairing, chip::SecureSession::SessionRole::kResponder,
+                                     gFabricIndex);
     SuccessOrExit(err);
 
     printf("Listening for IM requests...\n");
 
+    MockEventGenerator::GetInstance()->Init(&gExchangeManager, &gLivenessGenerator, 1000, true);
+
     chip::DeviceLayer::PlatformMgr().RunEventLoop();
 
 exit:
+    MockEventGenerator::GetInstance()->SetEventGeneratorStop();
 
     if (err != CHIP_NO_ERROR)
     {

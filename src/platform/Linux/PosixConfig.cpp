@@ -72,6 +72,9 @@ const PosixConfig::Key PosixConfig::kConfigKey_OperationalDeviceId         = { k
 const PosixConfig::Key PosixConfig::kConfigKey_OperationalDeviceCert       = { kConfigNamespace_ChipConfig, "op-device-cert" };
 const PosixConfig::Key PosixConfig::kConfigKey_OperationalDeviceICACerts   = { kConfigNamespace_ChipConfig, "op-device-ca-certs" };
 const PosixConfig::Key PosixConfig::kConfigKey_OperationalDevicePrivateKey = { kConfigNamespace_ChipConfig, "op-device-key" };
+const PosixConfig::Key PosixConfig::kConfigKey_RegulatoryLocation          = { kConfigNamespace_ChipConfig, "regulatory-location" };
+const PosixConfig::Key PosixConfig::kConfigKey_CountryCode                 = { kConfigNamespace_ChipConfig, "country-code" };
+const PosixConfig::Key PosixConfig::kConfigKey_Breadcrumb                  = { kConfigNamespace_ChipConfig, "breadcrumb" };
 
 // Prefix used for NVS keys that contain Chip group encryption keys.
 const char PosixConfig::kGroupKeyNamePrefix[] = "gk-";
@@ -355,7 +358,7 @@ CHIP_ERROR PosixConfig::WriteConfigValueBin(Key key, const uint8_t * data, size_
         err = storage->Commit();
         SuccessOrExit(err);
 
-        ChipLogProgress(DeviceLayer, "NVS set: %s/%s = (blob length %" PRId32 ")", key.Namespace, key.Name, dataLen);
+        ChipLogProgress(DeviceLayer, "NVS set: %s/%s = (blob length %zu)", key.Namespace, key.Name, dataLen);
     }
     else
     {

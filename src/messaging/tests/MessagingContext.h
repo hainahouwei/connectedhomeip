@@ -16,9 +16,12 @@
  */
 #pragma once
 
+#include <credentials/CHIPOperationalCredentials.h>
 #include <messaging/ExchangeContext.h>
 #include <messaging/ExchangeMgr.h>
-#include <transport/AdminPairingTable.h>
+#include <protocols/secure_channel/MessageCounterManager.h>
+#include <protocols/secure_channel/PASESession.h>
+#include <transport/FabricTable.h>
 #include <transport/SecureSessionMgr.h>
 #include <transport/TransportMgr.h>
 #include <transport/raw/tests/NetworkTestHelpers.h>
@@ -30,16 +33,17 @@ namespace Test {
  * @brief The context of test cases for messaging layer. It wil initialize network layer and system layer, and create
  *        two secure sessions, connected with each other. Exchanges can be created for each secure session.
  */
-class MessagingContext : public IOContext
+class MessagingContext
 {
 public:
     MessagingContext() :
-        mPeer(Transport::PeerAddress::UDP(GetAddress(), CHIP_PORT)), mPairingPeerToLocal(GetLocalKeyId(), GetPeerKeyId()),
-        mPairingLocalToPeer(GetPeerKeyId(), GetLocalKeyId())
+        mInitialized(false), mPeer(Transport::PeerAddress::UDP(GetAddress(), CHIP_PORT)),
+        mPairingPeerToLocal(GetLocalKeyId(), GetPeerKeyId()), mPairingLocalToPeer(GetPeerKeyId(), GetLocalKeyId())
     {}
+    ~MessagingContext() { VerifyOrDie(mInitialized == false); }
 
     /// Initialize the underlying layers and test suite pointer
-    CHIP_ERROR Init(nlTestSuite * suite, TransportMgrBase * transport);
+    CHIP_ERROR Init(nlTestSuite * suite, TransportMgrBase * transport, IOContext * io);
 
     // Shutdown all layers, finalize operations
     CHIP_ERROR Shutdown();
@@ -50,29 +54,57 @@ public:
         Inet::IPAddress::FromString("127.0.0.1", addr);
         return addr;
     }
-    static constexpr NodeId GetSourceNodeId() { return 123654; }
-    static constexpr NodeId GetDestinationNodeId() { return 111222333; }
+    NodeId GetSourceNodeId() const { return mSourceNodeId; }
+    NodeId GetDestinationNodeId() const { return mDestinationNodeId; }
 
-    static constexpr uint16_t GetLocalKeyId() { return 1; }
-    static constexpr uint16_t GetPeerKeyId() { return 2; }
-    static constexpr uint16_t GetAdminId() { return 0; }
+    void SetSourceNodeId(NodeId nodeId) { mSourceNodeId = nodeId; }
+    void SetDestinationNodeId(NodeId nodeId) { mDestinationNodeId = nodeId; }
+
+    uint16_t GetLocalKeyId() const { return mLocalKeyId; }
+    uint16_t GetPeerKeyId() const { return mPeerKeyId; }
+
+    void SetLocalKeyId(uint16_t id) { mLocalKeyId = id; }
+    void SetPeerKeyId(uint16_t id) { mPeerKeyId = id; }
+
+    FabricIndex GetFabricIndex() const { return mSrcFabricIndex; }
+    void SetFabricIndex(FabricIndex id)
+    {
+        mSrcFabricIndex  = id;
+        mDestFabricIndex = id;
+    }
 
     SecureSessionMgr & GetSecureSessionManager() { return mSecureSessionMgr; }
     Messaging::ExchangeManager & GetExchangeManager() { return mExchangeManager; }
+    secure_channel::MessageCounterManager & GetMessageCounterManager() { return mMessageCounterManager; }
+
+    SecureSessionHandle GetSessionLocalToPeer();
+    SecureSessionHandle GetSessionPeerToLocal();
 
     Messaging::ExchangeContext * NewExchangeToPeer(Messaging::ExchangeDelegate * delegate);
     Messaging::ExchangeContext * NewExchangeToLocal(Messaging::ExchangeDelegate * delegate);
 
+    Credentials::OperationalCredentialSet & GetOperationalCredentialSet() { return mOperationalCredentialSet; }
+
+    System::Layer & GetSystemLayer() { return mIOContext->GetSystemLayer(); }
+
 private:
+    bool mInitialized;
     SecureSessionMgr mSecureSessionMgr;
     Messaging::ExchangeManager mExchangeManager;
+    secure_channel::MessageCounterManager mMessageCounterManager;
+    IOContext * mIOContext;
 
+    NodeId mSourceNodeId      = 123654;
+    NodeId mDestinationNodeId = 111222333;
+    uint16_t mLocalKeyId      = 1;
+    uint16_t mPeerKeyId       = 2;
     Optional<Transport::PeerAddress> mPeer;
     SecurePairingUsingTestSecret mPairingPeerToLocal;
     SecurePairingUsingTestSecret mPairingLocalToPeer;
-    Transport::AdminPairingTable mAdmins;
-    Transport::AdminId mSrcAdminId  = 0;
-    Transport::AdminId mDestAdminId = 1;
+    Transport::FabricTable mFabrics;
+    FabricIndex mSrcFabricIndex  = 0;
+    FabricIndex mDestFabricIndex = 0;
+    Credentials::OperationalCredentialSet mOperationalCredentialSet;
 };
 
 } // namespace Test

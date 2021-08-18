@@ -19,53 +19,46 @@ import("${chip_root}/build/chip/tools.gni")
 
 assert(chip_build_tools)
 
-config("includes") {
-  include_dirs = [ "." ]
+declare_args() {
+  # Use a separate eventloop for CHIP tasks
+  config_use_separate_eventloop = true
+
+  # Generate a new node id on every pairing.  This significantly slows
+  # down running a lot of pairings (because of all the disk traffic for
+  # saving the config file), so we disable it in some configurations.
+  config_pair_with_random_id = true
 }
 
 executable("chip-tool") {
   sources = [
-    "${chip_root}/src/app/clusters/media-playback-client/media-playback-client.cpp",
-    "${chip_root}/src/app/reporting/reporting-default-configuration.cpp",
-    "${chip_root}/src/app/reporting/reporting.cpp",
-    "${chip_root}/src/app/server/DataModelHandler.cpp",
-    "${chip_root}/src/app/util/af-event.cpp",
-    "${chip_root}/src/app/util/af-main-common.cpp",
-    "${chip_root}/src/app/util/attribute-size.cpp",
-    "${chip_root}/src/app/util/attribute-storage.cpp",
-    "${chip_root}/src/app/util/attribute-table.cpp",
-    "${chip_root}/src/app/util/binding-table.cpp",
-    "${chip_root}/src/app/util/chip-message-send.cpp",
-    "${chip_root}/src/app/util/client-api.cpp",
-    "${chip_root}/src/app/util/ember-print.cpp",
-    "${chip_root}/src/app/util/message.cpp",
-    "${chip_root}/src/app/util/process-cluster-message.cpp",
-    "${chip_root}/src/app/util/process-global-message.cpp",
-    "${chip_root}/src/app/util/util.cpp",
     "commands/clusters/ModelCommand.cpp",
     "commands/common/Command.cpp",
     "commands/common/Commands.cpp",
+    "commands/discover/DiscoverCommand.cpp",
+    "commands/discover/DiscoverCommissionablesCommand.cpp",
+    "commands/discover/DiscoverCommissionersCommand.cpp",
     "commands/pairing/PairingCommand.cpp",
     "commands/payload/AdditionalDataParseCommand.cpp",
     "commands/payload/SetupPayloadParseCommand.cpp",
     "commands/reporting/ReportingCommand.cpp",
+    "commands/tests/TestCommand.cpp",
     "config/PersistentStorage.cpp",
-    "gen/CHIPClientCallbacks.cpp",
-    "gen/call-command-handler.cpp",
-    "gen/callback-stub.cpp",
     "main.cpp",
   ]
 
-  cflags = [ "-Wconversion" ]
+  defines = [
+    "CONFIG_USE_SEPARATE_EVENTLOOP=${config_use_separate_eventloop}",
+    "CONFIG_PAIR_WITH_RANDOM_ID=${config_pair_with_random_id}",
+  ]
 
-  public_deps = [
-    "${chip_root}/src/app/server",
+  deps = [
+    "${chip_root}/src/controller/data_model",
     "${chip_root}/src/lib",
     "${chip_root}/src/platform",
     "${chip_root}/third_party/inipp",
   ]
 
-  public_configs = [ ":includes" ]
+  cflags = [ "-Wconversion" ]
 
   output_dir = root_out_dir
 }

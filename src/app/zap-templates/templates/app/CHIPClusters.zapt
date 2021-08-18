@@ -1,0 +1,58 @@
+{{> header}}
+
+{{#if (chip_has_client_clusters)}}
+// Prevent multiple inclusion
+#pragma once
+
+#include <app/common/gen/ids/Clusters.h>
+#include <app/common/gen/ids/Commands.h>
+
+#include <controller/CHIPCluster.h>
+#include <core/CHIPCallback.h>
+#include <lib/support/Span.h>
+
+namespace chip {
+namespace Controller {
+
+{{#chip_client_clusters}}
+class DLL_EXPORT {{asUpperCamelCase name}}Cluster : public ClusterBase
+{
+public:
+    {{asUpperCamelCase name}}Cluster() : ClusterBase(app::Clusters::{{asUpperCamelCase name}}::Id) {}
+    ~{{asUpperCamelCase name}}Cluster() {}
+    {{#chip_cluster_commands}}
+    {{#first}}
+
+    // Cluster Commands
+    {{/first}}
+    CHIP_ERROR {{asUpperCamelCase name}}(Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback{{#chip_cluster_command_arguments}}, {{chipType}} {{asLowerCamelCase label}}{{/chip_cluster_command_arguments}});
+    {{/chip_cluster_commands}}
+
+    // Cluster Attributes
+    CHIP_ERROR DiscoverAttributes(Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback);
+    {{#chip_server_cluster_attributes}}
+    CHIP_ERROR ReadAttribute{{asUpperCamelCase name}}(Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback);
+    {{/chip_server_cluster_attributes}}
+    {{#chip_server_cluster_attributes}}
+    {{#if isWritableAttribute}}
+    CHIP_ERROR WriteAttribute{{asUpperCamelCase name}}(Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback, {{chipType}} value);
+    {{/if}}
+    {{/chip_server_cluster_attributes}}
+    {{#chip_server_cluster_attributes}}
+    {{#if isReportableAttribute}}
+    CHIP_ERROR ConfigureAttribute{{asUpperCamelCase name}}(Callback::Cancelable * onSuccessCallback, Callback::Cancelable * onFailureCallback, uint16_t minInterval, uint16_t maxInterval{{#if isAnalog}}, {{chipType}} change{{/if}});
+    CHIP_ERROR ReportAttribute{{asUpperCamelCase name}}(Callback::Cancelable * onReportCallback);
+    {{/if}}
+    {{/chip_server_cluster_attributes}}
+    {{#chip_cluster_commands}}
+    {{#first}}
+
+private:
+    {{/first}}
+    {{/chip_cluster_commands}}
+};
+
+{{/chip_client_clusters}}
+} // namespace Controller
+} // namespace chip
+{{/if}}

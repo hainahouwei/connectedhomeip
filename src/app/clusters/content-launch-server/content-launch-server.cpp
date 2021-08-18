@@ -38,16 +38,19 @@
  *******************************************************************************
  ******************************************************************************/
 
+#include <app/CommandHandler.h>
 #include <app/util/af.h>
 
-bool emberAfContentLaunchClusterLaunchContentCallback()
+using namespace chip;
+
+bool emberAfContentLauncherClusterLaunchContentCallback(app::CommandHandler * commandObj)
 {
     EmberAfStatus status = EMBER_ZCL_STATUS_SUCCESS;
     emberAfSendImmediateDefaultResponse(status);
     return true;
 }
 
-bool emberAfContentLaunchClusterLaunchURLCallback()
+bool emberAfContentLauncherClusterLaunchURLCallback(app::CommandHandler * commandObj)
 {
     EmberAfStatus status = EMBER_ZCL_STATUS_SUCCESS;
     emberAfSendImmediateDefaultResponse(status);

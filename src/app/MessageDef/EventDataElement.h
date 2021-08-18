@@ -23,18 +23,17 @@
 
 #pragma once
 
-#ifndef _CHIP_INTERACTION_MODEL_MESSAGE_DEF_EVENT_DATA_ELEMENT_H
-#define _CHIP_INTERACTION_MODEL_MESSAGE_DEF_EVENT_DATA_ELEMENT_H
-
 #include "Builder.h"
 #include "EventPath.h"
 
 #include "Parser.h"
+
+#include <app/AppBuildConfig.h>
+#include <app/util/basic-types.h>
 #include <core/CHIPCore.h>
 #include <core/CHIPTLV.h>
 #include <support/CodeUtils.h>
 #include <support/logging/CHIPLogging.h>
-#include <util/basic-types.h>
 
 namespace chip {
 namespace app {
@@ -63,6 +62,7 @@ public:
      */
     CHIP_ERROR Init(const chip::TLV::TLVReader & aReader);
 
+#if CHIP_CONFIG_IM_ENABLE_SCHEMA_CHECK
     /**
      *  @brief Roughly verify the message is correctly formed
      *   1) all mandatory tags are present
@@ -77,6 +77,7 @@ public:
      *  @return #CHIP_NO_ERROR on success
      */
     CHIP_ERROR CheckSchemaValidity() const;
+#endif
 
     /**
      *  @brief Get a TLVReader for the EventPath. Next() must be called before accessing them.
@@ -136,7 +137,7 @@ public:
     /**
      *  @brief Get a TLVReader for the DeltaUTCTimestamp. Next() must be called before accessing them.
      *
-     *  @param [in] apDeltaUTCTimestampstamp   A pointer to apDeltaUTCTimestamp
+     *  @param [in] apDeltaUTCTimestamp   A pointer to apDeltaUTCTimestamp
      *
      *  @return #CHIP_NO_ERROR on success
      *          #CHIP_ERROR_WRONG_TLV_TYPE if there is such element but it's not any of the defined unsigned integer types
@@ -246,7 +247,7 @@ public:
      *  This field is present if delta encoding of the System timestamp relative to a prior event is desired for compression
      * reasons. When this field is present, the System Timestamp field SHALL be omitted.
      *
-     *  @param [in] DeltaSystemTimestamp The uint64_t variable to reflect DeltaSystemTimestamp
+     *  @param [in] aDeltaSystemTimestamp The uint64_t variable to reflect DeltaSystemTimestamp
      *
      *  @return A reference to *this
      */
@@ -265,5 +266,3 @@ private:
 }; // namespace EventDataElement
 }; // namespace app
 }; // namespace chip
-
-#endif // _CHIP_INTERACTION_MODEL_MESSAGE_DEF_EVENT_DATA_ELEMENT_H

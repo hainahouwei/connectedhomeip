@@ -40,18 +40,17 @@
  *******************************************************************************
  ******************************************************************************/
 
-#include "af-event.h"
-#include "af-main.h"
-#include "af.h"
 #include "app/util/common.h"
+#include <app/common/gen/attribute-id.h>
+#include <app/common/gen/attribute-type.h>
+#include <app/common/gen/callback.h>
+#include <app/common/gen/cluster-id.h>
+#include <app/common/gen/command-id.h>
+#include <app/common/gen/print-cluster.h>
 #include <app/reporting/reporting.h>
-
-#include "gen/attribute-id.h"
-#include "gen/attribute-type.h"
-#include "gen/callback.h"
-#include "gen/cluster-id.h"
-#include "gen/command-id.h"
-#include "gen/print-cluster.h"
+#include <app/util/af-event.h>
+#include <app/util/af-main.h>
+#include <app/util/af.h>
 
 #ifdef EMBER_AF_PLUGIN_GROUPS_SERVER
 #include <app/clusters/groups-server/groups-server.h>
@@ -100,6 +99,9 @@ EmberAfClusterCommand curCmd;
 // to NULL when the function exits.
 EmberAfClusterCommand * emAfCurrentCommand;
 
+// A pointer to the global exchange manager
+chip::Messaging::ExchangeManager * emAfExchangeMgr = nullptr;
+
 // DEPRECATED.
 uint8_t emberAfIncomingZclSequenceNumber = 0xFF;
 
@@ -130,14 +132,20 @@ uint8_t emAfExtendedPanId[EXTENDED_PAN_ID_SIZE] = {
     0, 0, 0, 0, 0, 0, 0, 0,
 };
 
-#ifdef EMBER_AF_PLUGIN_TEMPERATURE_MEASUREMENT_SERVER
-void emberAfPluginTemperatureMeasurementServerInitCallback(void);
-#endif
 #ifdef EMBER_AF_PLUGIN_BARRIER_CONTROL_SERVER
 void emberAfPluginBarrierControlServerInitCallback(void);
 #endif
 #ifdef EMBER_AF_PLUGIN_DOOR_LOCK_SERVER
 void emberAfPluginDoorLockServerInitCallback(void);
+#endif
+#ifdef ZCL_USING_DESCRIPTOR_CLUSTER_SERVER
+void emberAfPluginDescriptorServerInitCallback(void);
+#endif
+#ifdef ZCL_USING_TEST_CLUSTER_SERVER
+void emberAfPluginTestClusterServerInitCallback(void);
+#endif
+#ifdef ZCL_USING_OPERATIONAL_CREDENTIALS_CLUSTER_SERVER
+void emberAfPluginOperationalCredentialsServerInitCallback(void);
 #endif
 
 #ifdef EMBER_AF_GENERATED_PLUGIN_TICK_FUNCTION_DECLARATIONS
@@ -149,7 +157,7 @@ EMBER_AF_GENERATED_PLUGIN_TICK_FUNCTION_DECLARATIONS
 // Device enabled/disabled functions
 bool emberAfIsDeviceEnabled(EndpointId endpoint)
 {
-    uint8_t index;
+    uint16_t index;
 #ifdef ZCL_USING_BASIC_CLUSTER_DEVICE_ENABLED_ATTRIBUTE
     bool deviceEnabled;
     if (emberAfReadServerAttribute(endpoint, ZCL_BASIC_CLUSTER_ID, ZCL_DEVICE_ENABLED_ATTRIBUTE_ID, (uint8_t *) &deviceEnabled,
@@ -159,7 +167,7 @@ bool emberAfIsDeviceEnabled(EndpointId endpoint)
     }
 #endif
     index = emberAfIndexFromEndpoint(endpoint);
-    if (index != 0xFF && index < sizeof(afDeviceEnabled))
+    if (index != 0xFFFF && index < sizeof(afDeviceEnabled))
     {
         return afDeviceEnabled[index];
     }
@@ -168,8 +176,8 @@ bool emberAfIsDeviceEnabled(EndpointId endpoint)
 
 void emberAfSetDeviceEnabled(EndpointId endpoint, bool enabled)
 {
-    uint8_t index = emberAfIndexFromEndpoint(endpoint);
-    if (index != 0xFF && index < sizeof(afDeviceEnabled))
+    uint16_t index = emberAfIndexFromEndpoint(endpoint);
+    if (index != 0xFFFF && index < sizeof(afDeviceEnabled))
     {
         afDeviceEnabled[index] = enabled;
     }
@@ -263,12 +271,14 @@ static void prepareForResponse(const EmberAfClusterCommand * cmd)
 // ****************************************
 // Initialize Clusters
 // ****************************************
-void emberAfInit(void)
+void emberAfInit(chip::Messaging::ExchangeManager * exchangeMgr)
 {
     uint8_t i;
 #ifdef EMBER_AF_ENABLE_STATISTICS
     afNumPktsSent = 0;
 #endif
+
+    emAfExchangeMgr = exchangeMgr;
 
     for (i = 0; i < EMBER_SUPPORTED_NETWORKS; i++)
     {
@@ -289,14 +299,20 @@ void emberAfInit(void)
     // Initialize the reporting plugin
     emberAfPluginReportingInitCallback();
 
-#ifdef EMBER_AF_PLUGIN_TEMPERATURE_MEASUREMENT_SERVER
-    emberAfPluginTemperatureMeasurementServerInitCallback();
-#endif
 #ifdef EMBER_AF_PLUGIN_BARRIER_CONTROL_SERVER
     emberAfPluginBarrierControlServerInitCallback();
 #endif
 #ifdef EMBER_AF_PLUGIN_DOOR_LOCK_SERVER
     emberAfPluginDoorLockServerInitCallback();
+#endif
+#ifdef ZCL_USING_DESCRIPTOR_CLUSTER_SERVER
+    emberAfPluginDescriptorServerInitCallback();
+#endif
+#ifdef ZCL_USING_TEST_CLUSTER_SERVER
+    emberAfPluginTestClusterServerInitCallback();
+#endif
+#ifdef ZCL_USING_OPERATIONAL_CREDENTIALS_CLUSTER_SERVER
+    emberAfPluginOperationalCredentialsServerInitCallback();
 #endif
 
     emAfCallInits();
@@ -345,7 +361,7 @@ void emberAfStackDown(void)
 
 uint16_t emberAfFindClusterNameIndexWithMfgCode(ClusterId cluster, uint16_t mfgCode)
 {
-    static_assert(sizeof(ClusterId) == 2, "May need to adjust our index type or somehow define it in terms of cluster id type");
+    static_assert(sizeof(ClusterId) == 4, "May need to adjust our index type or somehow define it in terms of cluster id type");
     uint16_t index = 0;
     while (zclClusterNames[index].id != ZCL_NULL_CLUSTER_ID)
     {
@@ -377,8 +393,8 @@ void emberAfDecodeAndPrintClusterWithMfgCode(ClusterId cluster, uint16_t mfgCode
     uint16_t index = emberAfFindClusterNameIndexWithMfgCode(cluster, mfgCode);
     if (index == 0xFFFF)
     {
-        static_assert(sizeof(ClusterId) == 2, "Adjust the print formatting");
-        emberAfPrint(emberAfPrintActiveArea, "(Unknown clus. [0x%2x])", cluster);
+        static_assert(sizeof(ClusterId) == 4, "Adjust the print formatting");
+        emberAfPrint(emberAfPrintActiveArea, "(Unknown clus. [0x%4x])", cluster);
     }
     else
     {
@@ -437,9 +453,9 @@ static void printIncomingZclMessage(const EmberAfClusterCommand * cmd)
 
 static bool dispatchZclMessage(EmberAfClusterCommand * cmd)
 {
-    uint8_t index = emberAfIndexFromEndpoint(cmd->apsFrame->destinationEndpoint);
+    uint16_t index = emberAfIndexFromEndpoint(cmd->apsFrame->destinationEndpoint);
 
-    if (index == 0xFF)
+    if (index == 0xFFFF)
     {
         emberAfDebugPrint("Drop cluster 0x%2x command 0x%x", cmd->apsFrame->clusterId, cmd->commandId);
         emberAfDebugPrint(" due to invalid endpoint: ");
@@ -470,7 +486,7 @@ static bool dispatchZclMessage(EmberAfClusterCommand * cmd)
 }
 
 bool emberAfProcessMessageIntoZclCmd(EmberApsFrame * apsFrame, EmberIncomingMessageType type, uint8_t * message,
-                                     uint16_t messageLength, NodeId source, InterPanHeader * interPanHeader,
+                                     uint16_t messageLength, Messaging::ExchangeContext * exchange, InterPanHeader * interPanHeader,
                                      EmberAfClusterCommand * returnCmd)
 {
     uint8_t minLength =
@@ -485,7 +501,7 @@ bool emberAfProcessMessageIntoZclCmd(EmberApsFrame * apsFrame, EmberIncomingMess
     // Populate the cluster command struct for processing.
     returnCmd->apsFrame        = apsFrame;
     returnCmd->type            = type;
-    returnCmd->source          = source;
+    returnCmd->source          = exchange;
     returnCmd->buffer          = message;
     returnCmd->bufLen          = messageLength;
     returnCmd->clusterSpecific = (message[0] & ZCL_CLUSTER_SPECIFIC_COMMAND);
@@ -502,8 +518,9 @@ bool emberAfProcessMessageIntoZclCmd(EmberApsFrame * apsFrame, EmberIncomingMess
     {
         returnCmd->mfgCode = EMBER_AF_NULL_MANUFACTURER_CODE;
     }
-    returnCmd->seqNum    = message[returnCmd->payloadStartIndex++];
-    returnCmd->commandId = message[returnCmd->payloadStartIndex++];
+    returnCmd->seqNum            = message[returnCmd->payloadStartIndex++];
+    returnCmd->commandId         = emberAfGetInt32u(message, returnCmd->payloadStartIndex, returnCmd->bufLen);
+    returnCmd->payloadStartIndex = static_cast<uint8_t>(returnCmd->payloadStartIndex + 4);
     if (returnCmd->payloadStartIndex > returnCmd->bufLen)
     {
         emberAfAppPrintln("%pRX pkt malformed: %d < %d", "ERROR: ", returnCmd->bufLen, returnCmd->payloadStartIndex);
@@ -516,12 +533,12 @@ bool emberAfProcessMessageIntoZclCmd(EmberApsFrame * apsFrame, EmberIncomingMess
 
 // a single call to process global and cluster-specific messages and callbacks.
 bool emberAfProcessMessage(EmberApsFrame * apsFrame, EmberIncomingMessageType type, uint8_t * message, uint16_t msgLen,
-                           NodeId source, InterPanHeader * interPanHeader)
+                           Messaging::ExchangeContext * exchange, InterPanHeader * interPanHeader)
 {
     bool msgHandled = false;
     // reset/reinitialize curCmd
     curCmd = staticCmd;
-    if (!emberAfProcessMessageIntoZclCmd(apsFrame, type, message, msgLen, source, interPanHeader, &curCmd))
+    if (!emberAfProcessMessageIntoZclCmd(apsFrame, type, message, msgLen, exchange, interPanHeader, &curCmd))
     {
         goto kickout;
     }
@@ -680,9 +697,9 @@ void emAfApplyDisableDefaultResponse(uint8_t * frame_control)
     }
 }
 
-static bool isBroadcastDestination(NodeId responseDestination)
+static bool isBroadcastDestination(Messaging::ExchangeContext * responseDestination)
 {
-    // FIXME: Will need to actually figure out how to test for this!
+    // TODO: Will need to actually figure out how to test for this!
     return false;
 }
 
@@ -732,8 +749,8 @@ EmberStatus emberAfSendResponseWithCallback(EmberAfMessageSentFunction callback)
     else if (!isBroadcastDestination(emberAfResponseDestination))
     {
         label  = 'U';
-        status = emberAfSendUnicastWithCallback(EMBER_OUTGOING_DIRECT, emberAfResponseDestination, &emberAfResponseApsFrame,
-                                                appResponseLength, appResponseData, callback);
+        status = emberAfSendUnicastWithCallback(MessageSendDestination::ViaExchange(emberAfResponseDestination),
+                                                &emberAfResponseApsFrame, appResponseLength, appResponseData, callback);
     }
     else
     {
@@ -827,9 +844,9 @@ EmberStatus emberAfSendDefaultResponseWithCallback(const EmberAfClusterCommand *
         emberAfPutInt16uInResp(cmd->mfgCode);
     }
     emberAfPutInt8uInResp(cmd->seqNum);
-    emberAfPutInt8uInResp(ZCL_DEFAULT_RESPONSE_COMMAND_ID);
-    emberAfPutInt8uInResp(cmd->commandId);
-    emberAfPutInt8uInResp(status);
+    emberAfPutInt32uInResp(ZCL_DEFAULT_RESPONSE_COMMAND_ID);
+    emberAfPutInt32uInResp(cmd->commandId);
+    emberAfPutStatusInResp(status);
 
     prepareForResponse(cmd);
     return emberAfSendResponseWithCallback(callback);
@@ -838,52 +855,6 @@ EmberStatus emberAfSendDefaultResponseWithCallback(const EmberAfClusterCommand *
 EmberStatus emberAfSendDefaultResponse(const EmberAfClusterCommand * cmd, EmberAfStatus status)
 {
     return emberAfSendDefaultResponseWithCallback(cmd, status, NULL);
-}
-
-uint8_t emberAfMaximumApsPayloadLength(EmberOutgoingMessageType type, uint64_t indexOrDestination, EmberApsFrame * apsFrame)
-{
-    NodeId destination = EMBER_UNKNOWN_NODE_ID;
-    uint8_t max        = EMBER_AF_MAXIMUM_APS_PAYLOAD_LENGTH;
-
-    if ((apsFrame->options & EMBER_APS_OPTION_SOURCE_EUI64) != 0U)
-    {
-        max = static_cast<uint8_t>(max - EUI64_SIZE);
-    }
-    if ((apsFrame->options & EMBER_APS_OPTION_DESTINATION_EUI64) != 0U)
-    {
-        max = static_cast<uint8_t>(max - EUI64_SIZE);
-    }
-    if ((apsFrame->options & EMBER_APS_OPTION_FRAGMENT) != 0U)
-    {
-        max = static_cast<uint8_t>(max - EMBER_AF_APS_FRAGMENTATION_OVERHEAD);
-    }
-
-    switch (type)
-    {
-    case EMBER_OUTGOING_DIRECT:
-        destination = indexOrDestination;
-        break;
-    case EMBER_OUTGOING_VIA_ADDRESS_TABLE:
-        // destination = emberGetAddressTableRemoteNodeId(indexOrDestination);
-        break;
-    case EMBER_OUTGOING_VIA_BINDING:
-        // destination = emberGetBindingRemoteNodeId(indexOrDestination);
-        break;
-    case EMBER_OUTGOING_MULTICAST:
-        // APS multicast messages include the two-byte group id and exclude the
-        // one-byte destination endpoint, for a net loss of an extra byte.
-        max--;
-        break;
-    case EMBER_OUTGOING_BROADCAST:
-        break;
-    default:
-        // MISRA requires default case.
-        break;
-    }
-
-    max = static_cast<uint8_t>(max - emberAfGetSourceRouteOverheadCallback(destination));
-
-    return max;
 }
 
 void emberAfCopyInt16u(uint8_t * data, uint16_t index, uint16_t x)
@@ -907,7 +878,7 @@ void emberAfCopyInt32u(uint8_t * data, uint16_t index, uint32_t x)
     data[index + 3] = (uint8_t)(((x) >> 24) & 0xFF);
 }
 
-void emberAfCopyString(uint8_t * dest, const uint8_t * src, uint8_t size)
+void emberAfCopyString(uint8_t * dest, const uint8_t * src, size_t size)
 {
     if (src == NULL)
     {
@@ -922,14 +893,15 @@ void emberAfCopyString(uint8_t * dest, const uint8_t * src, uint8_t size)
         uint8_t length = emberAfStringLength(src);
         if (size < length)
         {
-            length = size;
+            // Since we have checked that size < length, size must be able to fit into the type of length.
+            length = static_cast<decltype(length)>(size);
         }
         memmove(dest + 1, src + 1, length);
         dest[0] = length;
     }
 }
 
-void emberAfCopyLongString(uint8_t * dest, const uint8_t * src, uint16_t size)
+void emberAfCopyLongString(uint8_t * dest, const uint8_t * src, size_t size)
 {
     if (src == NULL)
     {
@@ -945,7 +917,8 @@ void emberAfCopyLongString(uint8_t * dest, const uint8_t * src, uint16_t size)
         uint16_t length = emberAfLongStringLength(src);
         if (size < length)
         {
-            length = size;
+            // Since we have checked that size < length, size must be able to fit into the type of length.
+            length = static_cast<decltype(length)>(size);
         }
         memmove(dest + 2, src + 2, length);
         dest[0] = EMBER_LOW_BYTE(length);
@@ -962,7 +935,7 @@ void emberAfCopyLongString(uint8_t * dest, const uint8_t * src, uint16_t size)
 // You can pass in val1 as NULL, which will assume that it is
 // pointing to an array of all zeroes. This is used so that
 // default value of NULL is treated as all zeroes.
-int8_t emberAfCompareValues(uint8_t * val1, uint8_t * val2, uint8_t len, bool signedNumber)
+int8_t emberAfCompareValues(uint8_t * val1, uint8_t * val2, uint16_t len, bool signedNumber)
 {
     uint8_t i, j, k;
     if (signedNumber)
@@ -1069,8 +1042,8 @@ bool emberAfIsTypeSigned(EmberAfAttributeType dataType)
 
 EmberStatus emberAfEndpointEventControlSetInactive(EmberEventControl * controls, EndpointId endpoint)
 {
-    uint8_t index = emberAfIndexFromEndpoint(endpoint);
-    if (index == 0xFF)
+    uint16_t index = emberAfIndexFromEndpoint(endpoint);
+    if (index == 0xFFFF)
     {
         return EMBER_INVALID_ENDPOINT;
     }
@@ -1080,14 +1053,14 @@ EmberStatus emberAfEndpointEventControlSetInactive(EmberEventControl * controls,
 
 bool emberAfEndpointEventControlGetActive(EmberEventControl * controls, EndpointId endpoint)
 {
-    uint8_t index = emberAfIndexFromEndpoint(endpoint);
-    return (index != 0xFF && emberEventControlGetActive(&controls[index]));
+    uint16_t index = emberAfIndexFromEndpoint(endpoint);
+    return (index != 0xFFFF && emberEventControlGetActive(&controls[index]));
 }
 
 EmberStatus emberAfEndpointEventControlSetActive(EmberEventControl * controls, EndpointId endpoint)
 {
-    uint8_t index = emberAfIndexFromEndpoint(endpoint);
-    if (index == 0xFF)
+    uint16_t index = emberAfIndexFromEndpoint(endpoint);
+    if (index == 0xFFFF)
     {
         return EMBER_INVALID_ENDPOINT;
     }
@@ -1233,4 +1206,9 @@ uint8_t emberAfMake8bitEncodedChanPg(uint8_t page, uint8_t channel)
         // as case 0 to make MISRA happy.
         return channel | ENCODED_8BIT_CHANPG_PAGE_MASK_PAGE_0;
     }
+}
+
+chip::Messaging::ExchangeManager * chip::ExchangeManager()
+{
+    return emAfExchangeMgr;
 }

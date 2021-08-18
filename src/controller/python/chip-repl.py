@@ -23,6 +23,7 @@ import chip.logging
 import coloredlogs
 import logging
 
+
 def main():
     # The chip imports at the top level will be visible in the ipython REPL.
 
@@ -32,7 +33,7 @@ def main():
     # trace/debug logging is not friendly to an interactive console. Only keep errors.
     logging.getLogger().setLevel(logging.ERROR)
 
-    embed(header = '''
+    embed(header='''
 Welcome to the CHIP python REPL utilty.
 
 Usage examples:
@@ -58,34 +59,40 @@ for device in chip.ble.DiscoverSync(2000):
 
 import chip.ble.commissioning
 
-device = chip.ble.commissioning.Connect(discriminator=3840, pin=12345678)
+device = chip.ble.commissioning.Connect(discriminator=3840, pin=20202021)
 if device.needsNetworkCredentials:
   device.ConnectToWifi("ssid", "password")
 
 ######## Thread provisioning ########
 
 import chip.ble.commissioning
-device = chip.ble.commissioning.Connect(discriminator=3840, pin=12345678)
+device = chip.ble.commissioning.Connect(discriminator=3840, pin=20202021)
 
 # Thread data is an opaque blob, but it can be build with internal constructs
 # starting from a memset(0) equivalent
-from chip.internal.thread import ThreadDeviceNetworkInfo
+from chip.internal.thread import ThreadNetworkInfo
 
-data = ThreadDeviceNetworkInfo.parse(b'\\x00'*ThreadDeviceNetworkInfo.sizeof())
-data.ThreadNetworkName = "OpenThread"
-data.ThreadExtendedPANId = b"\\xde\\xad\\x00\\xbe\\xef\\x00\\xca\\xfe"
-data.ThreadMasterKey = b"\\x00\\x11\\x22\\x33\\x44\\x55\\x66\\x77\\x88\\x99\\xAA\\xBB\\xCC\\xDD\\xEE\\xFF"
-data.ThreadPANId = 0xabcd
-data.ThreadChannel = 15
-data.NetworkId = 0
-
-data.FieldPresent.NetworkId = True
-data.FieldPresent.ThreadExtendedPANId = True
+data = ThreadNetworkInfo.parse(b'\\x00'*ThreadNetworkInfo.sizeof())
+data.NetworkName = "OpenThread"
+data.ExtendedPANId = b"\\xde\\xad\\x00\\xbe\\xef\\x00\\xca\\xfe"
+data.MasterKey = b"\\x00\\x11\\x22\\x33\\x44\\x55\\x66\\x77\\x88\\x99\\xAA\\xBB\\xCC\\xDD\\xEE\\xFF"
+data.PANId = 0xabcd
+data.Channel = 15
 
 
 if device.needsNetworkCredentials:
-  device.ConnectToThread(ThreadDeviceNetworkInfo.build(data))
+  device.ConnectToThread(ThreadNetworkInfo.build(data))
+
+######## Node discovery ########
+
+import chip.discovery
+
+chip.discovery.FindAddressAsync(123, 456, lambda x: print("%r", x))
+
+print(chip.discovery.FindAddress(123, 456)
+
     '''.strip())
+
 
 if __name__ == "__main__":
     main()

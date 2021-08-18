@@ -211,8 +211,11 @@ void GenericThreadStackManagerImpl_OpenThread_LwIP<ImplClass>::UpdateThreadInter
                         }
                     }
 
-                    // Set the address state to PREFERRED or ACTIVE depending on the state in OpenThread.
-                    netif_ip6_addr_set_state(mNetIf, addrIdx, (otAddr->mPreferred) ? IP6_ADDR_PREFERRED : IP6_ADDR_VALID);
+                    // Set non-mesh-local address state to PREFERRED or ACTIVE depending on the state in OpenThread.
+                    netif_ip6_addr_set_state(mNetIf, addrIdx,
+                                             (otAddr->mPreferred && !IsOpenThreadMeshLocalAddress(Impl()->OTInstance(), addr))
+                                                 ? IP6_ADDR_PREFERRED
+                                                 : IP6_ADDR_VALID);
 
                     // Record that the netif address slot was assigned during this loop.
                     addrAssigned[addrIdx] = true;
@@ -240,7 +243,7 @@ void GenericThreadStackManagerImpl_OpenThread_LwIP<ImplClass>::UpdateThreadInter
                 uint8_t state = netif_ip6_addr_state(mNetIf, addrIdx);
                 if (state != IP6_ADDR_INVALID)
                 {
-                    IPAddress addr = IPAddress::FromLwIPAddr(*netif_ip6_addr(mNetIf, addrIdx));
+                    IPAddress addr = IPAddress::FromIPv6(*netif_ip6_addr(mNetIf, addrIdx));
                     char addrStr[50];
                     addr.ToString(addrStr, sizeof(addrStr));
                     const char * typeStr;

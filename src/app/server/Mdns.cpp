@@ -15,19 +15,23 @@
  *    limitations under the License.
  */
 
-#include "Mdns.h"
+#include <app/server/Mdns.h>
 
 #include <inttypes.h>
 
 #include <core/Optional.h>
 #include <mdns/Advertiser.h>
+#include <mdns/ServiceNaming.h>
+#include <messaging/ReliableMessageProtocolConfig.h>
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/ConfigurationManager.h>
+#include <protocols/secure_channel/PASESession.h>
+#include <setup_payload/AdditionalDataPayloadGenerator.h>
+#include <support/Span.h>
 #include <support/logging/CHIPLogging.h>
-#include <transport/AdminPairingTable.h>
-#include <transport/PASESession.h>
+#include <transport/FabricTable.h>
 
-#include "Server.h"
+#include <app/server/Server.h>
 
 namespace chip {
 namespace app {
@@ -35,65 +39,113 @@ namespace Mdns {
 
 namespace {
 
-NodeId GetCurrentNodeId()
+bool HaveOperationalCredentials()
 {
-    // TODO: once operational credentials are implemented, node ID should be read from them
-    if (!DeviceLayer::ConfigurationMgr().IsFullyProvisioned())
+    // Look for any fabric info that has a useful operational identity.
+    for (const Transport::FabricInfo & fabricInfo : GetGlobalFabricTable())
     {
-        ChipLogError(Discovery, "Device not fully provisioned. Node ID unknown.");
-        return chip::kTestDeviceNodeId;
+        if (fabricInfo.IsInitialized())
+        {
+            return true;
+        }
     }
 
-    // Admin pairings should have been persisted and should be loadable
+    ChipLogProgress(Discovery, "Failed to find a valid admin pairing. Node ID unknown");
+    return false;
+}
 
-    // TODO: once multi-admin is decided, figure out if a single node id
-    // is sufficient or if we need multi-node-id advertisement. Existing
-    // mdns advertises a single node id as parameter.
-
-    // Search for one admin pairing and use its node id.
-    auto pairing = GetGlobalAdminPairingTable().cbegin();
-    if (pairing != GetGlobalAdminPairingTable().cend())
+// Requires an 8-byte mac to accommodate thread.
+chip::ByteSpan FillMAC(uint8_t (&mac)[8])
+{
+    memset(mac, 0, 8);
+#if CHIP_DEVICE_CONFIG_ENABLE_THREAD
+    if (chip::DeviceLayer::ThreadStackMgr().GetPrimary802154MACAddress(mac) == CHIP_NO_ERROR)
     {
-        ChipLogProgress(Discovery, "Found admin paring for admin %" PRIX64 ", node %" PRIX64, pairing->GetAdminId(),
-                        pairing->GetNodeId());
-        return pairing->GetNodeId();
+        ChipLogDetail(Discovery, "Using Thread extended MAC for hostname.");
+        return chip::ByteSpan(mac, 8);
     }
-
-    ChipLogError(Discovery, "Failed to find a valid admin pairing. Node ID unknown");
-    return chip::kTestDeviceNodeId;
+#endif
+    if (DeviceLayer::ConfigurationMgr().GetPrimaryWiFiMACAddress(mac) == CHIP_NO_ERROR)
+    {
+        ChipLogDetail(Discovery, "Using wifi MAC for hostname");
+        return chip::ByteSpan(mac, 6);
+    }
+    ChipLogError(Discovery, "Wifi mac not known. Using a default.");
+    uint8_t temp[6] = { 0xEE, 0xAA, 0xBA, 0xDA, 0xBA, 0xD0 };
+    memcpy(mac, temp, 6);
+    return chip::ByteSpan(mac, 6);
 }
 
 } // namespace
 
+CHIP_ERROR GetCommissionableInstanceName(char * buffer, size_t bufferLen)
+{
+    auto & mdnsAdvertiser = chip::Mdns::ServiceAdvertiser::Instance();
+    return mdnsAdvertiser.GetCommissionableInstanceName(buffer, bufferLen);
+}
+
 /// Set MDNS operational advertisement
 CHIP_ERROR AdvertiseOperational()
 {
-    uint64_t fabricId;
-
-    if (DeviceLayer::ConfigurationMgr().GetFabricId(fabricId) != CHIP_NO_ERROR)
+    for (const Transport::FabricInfo & fabricInfo : GetGlobalFabricTable())
     {
-        ChipLogError(Discovery, "Fabric ID not known. Using a default");
-        fabricId = 5544332211;
+        if (fabricInfo.IsInitialized())
+        {
+            uint8_t mac[8];
+
+            const auto advertiseParameters =
+                chip::Mdns::OperationalAdvertisingParameters()
+                    .SetPeerId(PeerId().SetFabricId(fabricInfo.GetFabricId()).SetNodeId(fabricInfo.GetNodeId()))
+                    .SetMac(FillMAC(mac))
+                    .SetPort(CHIP_PORT)
+                    .SetMRPRetryIntervals(CHIP_CONFIG_MRP_DEFAULT_ACTIVE_RETRY_INTERVAL,
+                                          CHIP_CONFIG_MRP_DEFAULT_ACTIVE_RETRY_INTERVAL)
+                    .EnableIpV4(true);
+
+            auto & mdnsAdvertiser = chip::Mdns::ServiceAdvertiser::Instance();
+
+            ChipLogProgress(Discovery, "Advertise operational node " ChipLogFormatX64 "-" ChipLogFormatX64,
+                            ChipLogValueX64(advertiseParameters.GetPeerId().GetFabricId()),
+                            ChipLogValueX64(advertiseParameters.GetPeerId().GetNodeId()));
+            // Should we keep trying to advertise the other operational
+            // identities on failure?
+            ReturnErrorOnFailure(mdnsAdvertiser.Advertise(advertiseParameters));
+        }
     }
 
-    const auto advertiseParameters = chip::Mdns::OperationalAdvertisingParameters()
-                                         .SetFabricId(fabricId)
-                                         .SetNodeId(GetCurrentNodeId())
-                                         .SetPort(CHIP_PORT)
-                                         .EnableIpV4(true);
-
-    auto & mdnsAdvertiser = chip::Mdns::ServiceAdvertiser::Instance();
-
-    ReturnErrorOnFailure(mdnsAdvertiser.Advertise(advertiseParameters));
-
-    return mdnsAdvertiser.Start(&chip::DeviceLayer::InetLayer, chip::Mdns::kMdnsPort);
+    return CHIP_NO_ERROR;
 }
 
-/// Set MDNS commisioning advertisement
-CHIP_ERROR AdvertiseCommisioning()
+/// Set MDNS commissioner advertisement
+CHIP_ERROR AdvertiseCommisioner()
 {
+    return Advertise(false);
+}
 
+/// Set MDNS commissionable node advertisement
+CHIP_ERROR AdvertiseCommissionableNode()
+{
+    return Advertise(true);
+}
+
+/// commissionableNode
+// CHIP_ERROR Advertise(chip::Mdns::CommssionAdvertiseMode mode)
+CHIP_ERROR Advertise(bool commissionableNode)
+{
     auto advertiseParameters = chip::Mdns::CommissionAdvertisingParameters().SetPort(CHIP_PORT).EnableIpV4(true);
+    advertiseParameters.SetCommissionAdvertiseMode(commissionableNode ? chip::Mdns::CommssionAdvertiseMode::kCommissionableNode
+                                                                      : chip::Mdns::CommssionAdvertiseMode::kCommissioner);
+
+    // TODO: device can re-enter commissioning mode after being fully provisioned
+    // (additionalPairing == true)
+    bool notYetCommissioned = !DeviceLayer::ConfigurationMgr().IsFullyProvisioned();
+    bool additionalPairing  = false;
+    advertiseParameters.SetCommissioningMode(notYetCommissioned, additionalPairing);
+
+    char pairingInst[chip::Mdns::kKeyPairingInstructionMaxLength + 1];
+
+    uint8_t mac[8];
+    advertiseParameters.SetMac(FillMAC(mac));
 
     uint16_t value;
     if (DeviceLayer::ConfigurationMgr().GetVendorId(value) != CHIP_NO_ERROR)
@@ -119,41 +171,127 @@ CHIP_ERROR AdvertiseCommisioning()
         ChipLogError(Discovery, "Setup discriminator not known. Using a default.");
         value = 840;
     }
-    advertiseParameters.SetShortDiscriminator(static_cast<uint8_t>(value & 0xFF)).SetLongDiscrimininator(value);
+    advertiseParameters.SetShortDiscriminator(static_cast<uint8_t>(value & 0xFF)).SetLongDiscriminator(value);
+
+    if (DeviceLayer::ConfigurationMgr().IsCommissionableDeviceTypeEnabled() &&
+        DeviceLayer::ConfigurationMgr().GetDeviceType(value) == CHIP_NO_ERROR)
+    {
+        advertiseParameters.SetDeviceType(chip::Optional<uint16_t>::Value(value));
+    }
+
+    char deviceName[chip::Mdns::kKeyDeviceNameMaxLength + 1];
+    if (DeviceLayer::ConfigurationMgr().IsCommissionableDeviceNameEnabled() &&
+        DeviceLayer::ConfigurationMgr().GetDeviceName(deviceName, sizeof(deviceName)) == CHIP_NO_ERROR)
+    {
+        advertiseParameters.SetDeviceName(chip::Optional<const char *>::Value(deviceName));
+    }
+
+#if CHIP_ENABLE_ROTATING_DEVICE_ID
+    char rotatingDeviceIdHexBuffer[RotatingDeviceId::kHexMaxLength];
+    ReturnErrorOnFailure(GenerateRotatingDeviceId(rotatingDeviceIdHexBuffer, ArraySize(rotatingDeviceIdHexBuffer)));
+    advertiseParameters.SetRotatingId(chip::Optional<const char *>::Value(rotatingDeviceIdHexBuffer));
+#endif
+
+    if (notYetCommissioned)
+    {
+        if (DeviceLayer::ConfigurationMgr().GetInitialPairingHint(value) != CHIP_NO_ERROR)
+        {
+            ChipLogProgress(Discovery, "DNS-SD Pairing Hint not set");
+        }
+        else
+        {
+            advertiseParameters.SetPairingHint(chip::Optional<uint16_t>::Value(value));
+        }
+
+        if (DeviceLayer::ConfigurationMgr().GetInitialPairingInstruction(pairingInst, sizeof(pairingInst)) != CHIP_NO_ERROR)
+        {
+            ChipLogProgress(Discovery, "DNS-SD Pairing Instruction not set");
+        }
+        else
+        {
+            advertiseParameters.SetPairingInstr(chip::Optional<const char *>::Value(pairingInst));
+        }
+    }
+    else
+    {
+        if (DeviceLayer::ConfigurationMgr().GetSecondaryPairingHint(value) != CHIP_NO_ERROR)
+        {
+            ChipLogProgress(Discovery, "DNS-SD Pairing Hint not set");
+        }
+        else
+        {
+            advertiseParameters.SetPairingHint(chip::Optional<uint16_t>::Value(value));
+        }
+
+        if (DeviceLayer::ConfigurationMgr().GetSecondaryPairingInstruction(pairingInst, sizeof(pairingInst)) != CHIP_NO_ERROR)
+        {
+            ChipLogProgress(Discovery, "DNS-SD Pairing Instruction not set");
+        }
+        else
+        {
+            advertiseParameters.SetPairingInstr(chip::Optional<const char *>::Value(pairingInst));
+        }
+    }
 
     auto & mdnsAdvertiser = chip::Mdns::ServiceAdvertiser::Instance();
 
-    ReturnErrorOnFailure(mdnsAdvertiser.Advertise(advertiseParameters));
-
-    return mdnsAdvertiser.Start(&chip::DeviceLayer::InetLayer, chip::Mdns::kMdnsPort);
+    ChipLogProgress(Discovery, "Advertise commission parameter vendorID=%u productID=%u discriminator=%04u/%02u",
+                    advertiseParameters.GetVendorId().ValueOr(0), advertiseParameters.GetProductId().ValueOr(0),
+                    advertiseParameters.GetLongDiscriminator(), advertiseParameters.GetShortDiscriminator());
+    return mdnsAdvertiser.Advertise(advertiseParameters);
 }
 
 /// (Re-)starts the minmdns server
 void StartServer()
 {
+    ChipLogProgress(Discovery, "Start dns-sd server");
     CHIP_ERROR err = chip::Mdns::ServiceAdvertiser::Instance().Start(&chip::DeviceLayer::InetLayer, chip::Mdns::kMdnsPort);
 
-    // TODO: advertise this only when really operational once we support both
-    // operational and commisioning advertising is supported.
-    if (DeviceLayer::ConfigurationMgr().IsFullyProvisioned())
+    err = app::Mdns::AdvertiseOperational();
+    if (err != CHIP_NO_ERROR)
     {
-        err = app::Mdns::AdvertiseOperational();
+        ChipLogError(Discovery, "Failed to advertise operational node: %s", chip::ErrorStr(err));
+    }
+
+    if (HaveOperationalCredentials())
+    {
+#if CHIP_DEVICE_CONFIG_ENABLE_EXTENDED_DISCOVERY
+        err = app::Mdns::AdvertiseCommissionableNode();
+#endif
     }
     else
     {
-// TODO: Thread devices are not able to advertise using mDNS before being provisioned,
-// so configuraton should be added to enable commissioning advertising based on supported
-// Rendezvous methods.
-#if !CHIP_DEVICE_CONFIG_ENABLE_THREAD
-        err = app::Mdns::AdvertiseCommisioning();
+#if CHIP_DEVICE_CONFIG_ENABLE_UNPROVISIONED_MDNS
+        err = app::Mdns::AdvertiseCommissionableNode();
 #endif
     }
+
+#if CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY
+    err = app::Mdns::AdvertiseCommisioner();
+#endif // CHIP_DEVICE_CONFIG_ENABLE_COMMISSIONER_DISCOVERY
 
     if (err != CHIP_NO_ERROR)
     {
         ChipLogError(Discovery, "Failed to start mDNS server: %s", chip::ErrorStr(err));
     }
 }
+
+#if CHIP_ENABLE_ROTATING_DEVICE_ID
+CHIP_ERROR GenerateRotatingDeviceId(char rotatingDeviceIdHexBuffer[], size_t rotatingDeviceIdHexBufferSize)
+{
+    char serialNumber[chip::DeviceLayer::ConfigurationManager::kMaxSerialNumberLength + 1];
+    size_t serialNumberSize                = 0;
+    uint16_t lifetimeCounter               = 0;
+    size_t rotatingDeviceIdValueOutputSize = 0;
+
+    ReturnErrorOnFailure(
+        chip::DeviceLayer::ConfigurationMgr().GetSerialNumber(serialNumber, sizeof(serialNumber), serialNumberSize));
+    ReturnErrorOnFailure(chip::DeviceLayer::ConfigurationMgr().GetLifetimeCounter(lifetimeCounter));
+    return AdditionalDataPayloadGenerator().generateRotatingDeviceId(lifetimeCounter, serialNumber, serialNumberSize,
+                                                                     rotatingDeviceIdHexBuffer, rotatingDeviceIdHexBufferSize,
+                                                                     rotatingDeviceIdValueOutputSize);
+}
+#endif
 
 } // namespace Mdns
 } // namespace app

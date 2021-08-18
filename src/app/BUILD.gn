@@ -14,14 +14,21 @@
 
 import("//build_overrides/chip.gni")
 import("//build_overrides/nlio.gni")
+
+import("${chip_root}/build/chip/buildconfig_header.gni")
 import("common_flags.gni")
 
-config("app_config") {
-  include_dirs = [
-    "util",
-    ".",
-    "${target_gen_dir}/include",
-  ]
+declare_args() {
+  # Enable strict schema checks.
+  chip_enable_schema_check =
+      is_debug && (current_os == "linux" || current_os == "mac")
+}
+
+buildconfig_header("app_buildconfig") {
+  header = "AppBuildConfig.h"
+  header_dir = "app"
+
+  defines = [ "CHIP_CONFIG_IM_ENABLE_SCHEMA_CHECK=${chip_enable_schema_check}" ]
 }
 
 static_library("app") {
@@ -32,6 +39,7 @@ static_library("app") {
     "Command.h",
     "CommandHandler.cpp",
     "CommandSender.cpp",
+    "EventManagement.cpp",
     "InteractionModelEngine.cpp",
     "MessageDef/AttributeDataElement.cpp",
     "MessageDef/AttributeDataElement.h",
@@ -69,6 +77,7 @@ static_library("app") {
     "MessageDef/ListBuilder.h",
     "MessageDef/ListParser.cpp",
     "MessageDef/ListParser.h",
+    "MessageDef/MessageDefHelper.cpp",
     "MessageDef/MessageDefHelper.h",
     "MessageDef/Parser.cpp",
     "MessageDef/Parser.h",
@@ -78,14 +87,32 @@ static_library("app") {
     "MessageDef/ReportData.h",
     "MessageDef/StatusElement.cpp",
     "MessageDef/StatusElement.h",
+    "MessageDef/SubscribeRequest.cpp",
+    "MessageDef/SubscribeResponse.cpp",
+    "MessageDef/TimedRequest.cpp",
+    "MessageDef/WriteRequest.cpp",
+    "MessageDef/WriteResponse.cpp",
     "ReadClient.cpp",
     "ReadHandler.cpp",
+    "WriteClient.cpp",
+    "WriteHandler.cpp",
     "decoder.cpp",
-    "encoder.cpp",
+    "encoder-common.cpp",
+    "reporting/Engine.cpp",
+    "reporting/Engine.h",
   ]
 
+  if (chip_ip_commissioning) {
+    defines = [
+      "CONFIG_USE_CLUSTERS_FOR_IP_COMMISSIONING=1",
+      "CONFIG_RENDEZVOUS_WAIT_FOR_COMMISSIONING_COMPLETE=1",
+      "CHIP_DEVICE_CONFIG_ENABLE_EXTENDED_DISCOVERY=1",
+      "CHIP_DEVICE_CONFIG_ENABLE_JUST_IN_TIME_PROVISIONING=1",
+    ]
+  }
+
   public_deps = [
-    ":codec_headers",
+    ":app_buildconfig",
     "${chip_root}/src/lib/support",
     "${chip_root}/src/messaging",
     "${chip_root}/src/system",
@@ -94,14 +121,5 @@ static_library("app") {
 
   cflags = [ "-Wconversion" ]
 
-  public_configs = [
-    ":app_config",
-    "${chip_root}/src:includes",
-  ]
-}
-
-copy("codec_headers") {
-  sources = [ "chip-zcl-zpro-codec.h" ]
-
-  outputs = [ "${target_gen_dir}/include/app/{{source_file_part}}" ]
+  public_configs = [ "${chip_root}/src:includes" ]
 }

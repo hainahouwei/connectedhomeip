@@ -38,9 +38,9 @@
  *******************************************************************************
  ******************************************************************************/
 
-#include "client-api.h"
 #include "app/util/common.h"
-#include "util.h"
+#include <app/util/client-api.h>
+#include <app/util/util.h>
 #include <stdarg.h>
 
 using namespace chip;
@@ -62,7 +62,7 @@ EmberApsFrame * emAfCommandApsFrame = NULL;
 static uint16_t vFillBuffer(uint8_t * buffer, uint16_t bufferLen, uint8_t frameControl, uint16_t manufacturerCode,
                             CommandId commandId, const char * format, va_list argPointer)
 {
-    uint32_t value;
+    uint64_t value;
     uint8_t valueLen;
     uint8_t * data;
     uint16_t dataLen;
@@ -89,7 +89,10 @@ static uint16_t vFillBuffer(uint8_t * buffer, uint16_t bufferLen, uint8_t frameC
         buffer[bytes++] = EMBER_HIGH_BYTE(manufacturerCode);
     }
     buffer[bytes++] = emberAfNextSequence();
-    buffer[bytes++] = commandId;
+    buffer[bytes++] = EMBER_BYTE_0(commandId);
+    buffer[bytes++] = EMBER_BYTE_1(commandId);
+    buffer[bytes++] = EMBER_BYTE_2(commandId);
+    buffer[bytes++] = EMBER_BYTE_3(commandId);
 
     // Each argument comes in as an integer value, a pointer to a buffer, or a
     // pointer to a buffer followed by an integer length.
@@ -160,8 +163,8 @@ static uint16_t vFillBuffer(uint8_t * buffer, uint16_t bufferLen, uint8_t frameC
         }
         else
         {
-            // u, v, x, and w are one-, two-, three-, or four-byte integers.  u and v
-            // must be extracted as an int while x and w come through as an uint32_t.
+            // u, v, x, w, and y are one-, two-, three-, four-byte or eight-byte integers.  u and v
+            // must be extracted as an int while x and w come through as an uint32_t, y as a uint64_t.
             // In all cases, the value is copied to the destination buffer in little-
             // endian format.
             dataLen = 0;
@@ -181,12 +184,27 @@ static uint16_t vFillBuffer(uint8_t * buffer, uint16_t bufferLen, uint8_t frameC
             {
                 valueLen = 4;
             }
+            else if (cmd == 'y')
+            {
+                valueLen = 8;
+            }
             else
             {
                 emberAfDebugPrintln("ERR: Unknown format '%c'", cmd);
                 return 0;
             }
-            value = valueLen <= 2 ? static_cast<uint32_t>(va_arg(argPointer, int)) : va_arg(argPointer, uint32_t);
+            if (valueLen <= 2)
+            {
+                value = static_cast<uint64_t>(va_arg(argPointer, int));
+            }
+            else if (valueLen <= 4)
+            {
+                value = static_cast<uint64_t>(va_arg(argPointer, uint32_t));
+            }
+            else
+            {
+                value = va_arg(argPointer, uint64_t);
+            }
         }
 
         // The destination buffer must be at least as large as the running total
@@ -315,16 +333,15 @@ EmberStatus emberAfSendCommandMulticastToBindings(void)
     return emberAfSendMulticastToBindings(emAfCommandApsFrame, *emAfResponseLengthPtr, emAfZclBuffer);
 }
 
-// EmberStatus emberAfSendCommandUnicastWithCallback(EmberOutgoingMessageType type, uint16_t indexOrDestination,
-//                                                   EmberAfMessageSentFunction callback)
+// EmberStatus emberAfSendCommandUnicastWithCallback(const chip::MessageSendDestination & destination, EmberAfMessageSentFunction
+// callback)
 // {
-//     return emberAfSendUnicastWithCallback(type, indexOrDestination, emAfCommandApsFrame, *emAfResponseLengthPtr, emAfZclBuffer,
-//                                           callback);
+//     return emberAfSendUnicastWithCallback(destination, emAfCommandApsFrame, *emAfResponseLengthPtr, emAfZclBuffer, callback);
 // }
 
-// EmberStatus emberAfSendCommandUnicast(EmberOutgoingMessageType type, uint16_t indexOrDestination)
+// EmberStatus emberAfSendCommandUnicast(const chip::MessageSendDestination & destination)
 // {
-//     return emberAfSendCommandUnicastWithCallback(type, indexOrDestination, NULL);
+//     return emberAfSendCommandUnicastWithCallback(destination, NULL);
 // }
 
 // EmberStatus emberAfSendCommandBroadcastWithCallback(EmberNodeId destination, EmberAfMessageSentFunction callback)

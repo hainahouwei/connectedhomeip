@@ -6,6 +6,7 @@
 
 #include "lib/mdns/platform/Mdns.h"
 #include "platform/CHIPDeviceLayer.h"
+#include "platform/PlatformManager.h"
 #include "support/CHIPMem.h"
 #include "support/UnitTestRegistration.h"
 
@@ -57,6 +58,7 @@ static void InitCallback(void * context, CHIP_ERROR error)
     service.mPort      = 80;
     strcpy(service.mName, "test");
     strcpy(service.mType, "_mock");
+    service.mAddressType   = chip::Inet::kIPAddressType_Any;
     service.mProtocol      = MdnsServiceProtocol::kMdnsProtocolTcp;
     entry.mKey             = key;
     entry.mData            = reinterpret_cast<const uint8_t *>(val);
@@ -75,7 +77,7 @@ static void ErrorCallback(void * context, CHIP_ERROR error)
 {
     if (error != CHIP_NO_ERROR)
     {
-        fprintf(stderr, "Mdns error: %d\n", static_cast<int>(error));
+        fprintf(stderr, "Mdns error: %" CHIP_ERROR_FORMAT "\n", error.Format());
         abort();
     }
 }
@@ -88,6 +90,7 @@ void TestMdnsPubSub(nlTestSuite * inSuite, void * inContext)
 
     ChipLogProgress(DeviceLayer, "Start EventLoop");
     chip::DeviceLayer::PlatformMgr().RunEventLoop();
+    ChipLogProgress(DeviceLayer, "End EventLoop");
 }
 
 static const nlTest sTests[] = { NL_TEST_DEF("Test Mdns::PubSub", TestMdnsPubSub), NL_TEST_SENTINEL() };
@@ -95,25 +98,57 @@ static const nlTest sTests[] = { NL_TEST_DEF("Test Mdns::PubSub", TestMdnsPubSub
 int TestMdns()
 {
     std::mutex mtx;
-    std::unique_lock<std::mutex> lock(mtx);
-    std::condition_variable done;
+
+    std::condition_variable readyCondition;
+    bool ready = false;
+
+    std::condition_variable doneCondition;
+    bool done = false;
+
     int retVal = EXIT_FAILURE;
 
-    std::thread t([&mtx, &done, &retVal]() {
+    std::thread t([&]() {
         {
-            std::lock_guard<std::mutex> localLock(mtx);
-            nlTestSuite theSuite = { "CHIP DeviceLayer mdns tests", &sTests[0], nullptr, nullptr };
-
-            nlTestRunner(&theSuite, nullptr);
-            retVal = nlTestRunnerStats(&theSuite);
+            std::lock_guard<std::mutex> lock(mtx);
+            ready = true;
+            readyCondition.notify_one();
         }
-        done.notify_all();
+
+        nlTestSuite theSuite = { "CHIP DeviceLayer mdns tests", &sTests[0], nullptr, nullptr };
+
+        nlTestRunner(&theSuite, nullptr);
+        retVal = nlTestRunnerStats(&theSuite);
+
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            done = true;
+            doneCondition.notify_all();
+        }
     });
 
-    if (done.wait_for(lock, std::chrono::seconds(5)) == std::cv_status::timeout)
     {
-        fprintf(stderr, "mDNS test timeout, is avahi daemon running?");
-        retVal = EXIT_FAILURE;
+        std::unique_lock<std::mutex> lock(mtx);
+        readyCondition.wait(lock, [&] { return ready; });
+
+        doneCondition.wait_for(lock, std::chrono::seconds(5));
+        if (!done)
+        {
+            fprintf(stderr, "mDNS test timeout, is avahi daemon running?\n");
+
+            //
+            // This will stop the event loop above, and wait till it has actually stopped
+            // (i.e exited RunEventLoop()).
+            //
+            chip::DeviceLayer::PlatformMgr().StopEventLoopTask();
+            chip::DeviceLayer::PlatformMgr().Shutdown();
+
+            doneCondition.wait_for(lock, std::chrono::seconds(1));
+            if (!done)
+            {
+                fprintf(stderr, "Orderly shutdown of the platform main loop failed as well.\n");
+            }
+            retVal = EXIT_FAILURE;
+        }
     }
     return retVal;
 }
