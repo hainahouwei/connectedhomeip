@@ -99,6 +99,12 @@ jobs:
                       /tmp/output_binaries/$BUILD_TYPE-build/chip-lock.elf
                   cp examples/shell/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
                       /tmp/output_binaries/$BUILD_TYPE-build/chip-shell.elf
+            - name: test
+              run: |
+                  apt-get install tree
+                  pwd
+                  tree
+                  ls
             - name: Binary artifact suffix
               id: outsuffix
               uses: haya14busa/action-cond@v1.0.0
@@ -112,8 +118,7 @@ jobs:
                   name:
                       ${{ env.BUILD_TYPE }}-example-build-${{
                       steps.outsuffix.outputs.value }}
-                  path: out/
-#                  path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
+                  path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
 
             # https://github.com/project-chip/connectedhomeip/issues/3100
             # - name: Remove third_party binaries for CodeQL Analysis
