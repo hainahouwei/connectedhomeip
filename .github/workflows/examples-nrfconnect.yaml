@@ -101,11 +101,8 @@ jobs:
                       /tmp/output_binaries/$BUILD_TYPE-build/chip-shell.elf
             - name: test
               run: |
-                  apt-get install tree
-              timeout-minutes: 2
                   pwd
                   ls
-                  tree
             - name: Binary artifact suffix
               id: outsuffix
               uses: haya14busa/action-cond@v1.0.0
