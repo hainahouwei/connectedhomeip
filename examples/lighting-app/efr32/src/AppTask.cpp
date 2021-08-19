@@ -56,6 +56,9 @@
 #define APP_TASK_PRIORITY 2
 #define APP_EVENT_QUEUE_SIZE 10
 #define EXAMPLE_VENDOR_ID 0xcafe
+/************************simon test start ************************************/
+#define ENABLE_SIMON_TEST  1
+/************************simon test end ************************************/
 namespace {
 
 TimerHandle_t sFunctionTimer; // FreeRTOS app sw timer.
@@ -124,6 +127,25 @@ CHIP_ERROR AppTask::Init()
         appError(err);
     }
 
+    /************************simon test start ************************************/
+    #if ENABLE_SIMON_TEST
+    // TimerHandle_t sTenMsTimer; // FreeRTOS app sw timer.
+    // // Create FreeRTOS sw timer for Function Selection.
+    // sTenMsTimer = xTimerCreate("TestTmr",          // Just a text name, not used by the RTOS kernel
+    //                               10,                // == default timer period (mS)
+    //                               false,            // no timer reload (==one-shot)
+    //                               (void *) this,    // init timer id = app task obj context
+    //                               TenMsTimerEventHandler // timer callback handler
+    // );
+    // if (sTenMsTimer == NULL)
+    // {
+    //     EFR32_LOG("10ms timer create failed");
+    //     appError(err);
+    // }
+    #endif ENABLE_SIMON_TEST
+    /************************simon test end ************************************/
+
+
     EFR32_LOG("Current Firmware Version: %s", CHIP_DEVICE_CONFIG_DEVICE_FIRMWARE_REVISION_STRING);
     err = LightMgr().Init();
     if (err != CHIP_NO_ERROR)
@@ -190,6 +212,11 @@ void AppTask::AppTaskMain(void * pvParameter)
         // locked while these values are queried.  However we use a non-blocking
         // lock request (TryLockCHIPStack()) to avoid blocking other UI activities
         // when the CHIP task is busy (e.g. with a long crypto operation).
+        //从CHIP协议栈中收集连接和配置状态。
+        //因为CHIP事件循环运行在分离的任务中，
+        //当查询这些值时协议栈必须被锁定。
+        //然而，我们使用非阻塞锁定请求(TryLockCHIPStack())
+        //以避免当CHIP任务繁忙时(例如一个很长的加密操作)阻塞其他UI活动。
         if (PlatformMgr().TryLockChipStack())
         {
             sIsThreadProvisioned     = ConnectivityMgr().IsThreadProvisioned();
@@ -216,19 +243,19 @@ void AppTask::AppTaskMain(void * pvParameter)
             // Consider the system to be "fully connected" if it has service
             // connectivity
             if (sHaveServiceConnectivity)
-            {
+            {//ble+thread connected 常亮
                 sStatusLED.Set(true);
             }
             else if (sIsThreadProvisioned && sIsThreadEnabled)
-            {
+            {//thread connected 慢闪
                 sStatusLED.Blink(950, 50);
             }
             else if (sHaveBLEConnections)
-            {
+            {//ble connected 匀速闪
                 sStatusLED.Blink(100, 100);
             }
             else
-            {
+            {// other 慢闪
                 sStatusLED.Blink(50, 950);
             }
         }
@@ -522,3 +549,11 @@ void AppTask::UpdateClusterState(void)
         EFR32_LOG("ERR: updating on/off %x", status);
     }
 }
+
+
+    /************************simon test start ************************************/
+    #if ENABLE_SIMON_TEST
+    
+
+    #endif
+     /************************simon test end ************************************/

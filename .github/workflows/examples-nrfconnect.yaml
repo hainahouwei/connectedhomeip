@@ -126,7 +126,7 @@ jobs:
               if: always()
               with:
                name: nrf_Light
-               path: examples/lighting-app/nrfconnect/build/                   
+               path: examples/lighting-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.hex                   
 
             # https://github.com/project-chip/connectedhomeip/issues/3100
             # - name: Remove third_party binaries for CodeQL Analysis
