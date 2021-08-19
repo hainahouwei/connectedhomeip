@@ -95,8 +95,8 @@ jobs:
             - name: Copy aside build products
               run: |
                   mkdir -p /tmp/output_binaries/$BUILD_TYPE-build
-                #  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/
                   cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/$BUILD_TYPE-build/
+                #  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/
                 # cp examples/lock-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
                   #     /tmp/output_binaries/$BUILD_TYPE-build/chip-lock.elf
                   # cp examples/shell/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
@@ -112,7 +112,7 @@ jobs:
                   cond: ${{ github.event.pull_request.number == '' }}
                   if_true: "${{ github.sha }}"
                   if_false: "pull-${{ github.event.pull_request.number }}"
-            - name: Uploading Binaries
+            - name: Uploading Binariess
               uses: actions/upload-artifact@v1
               with:
                   name:
