@@ -95,7 +95,7 @@ jobs:
             - name: Copy aside build products
               run: |
                   mkdir -p /tmp/output_binaries/$BUILD_TYPE-build
-                  cp examples/lock-app/nrfconnect/build/ /tmp/output_binaries/$BUILD_TYPE-build/
+                  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/$BUILD_TYPE-build/
                   cp examples/lock-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
                       /tmp/output_binaries/$BUILD_TYPE-build/chip-lock.elf
                   cp examples/shell/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
