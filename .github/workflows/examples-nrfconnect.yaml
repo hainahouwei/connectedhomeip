@@ -95,9 +95,9 @@ jobs:
             - name: Copy aside build products
               run: |
                   mkdir -p /tmp/output_binaries/$BUILD_TYPE-build
-                  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/
-                # cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/$BUILD_TYPE-build/
-                  # cp examples/lock-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
+                #  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/
+                  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/$BUILD_TYPE-build/
+                # cp examples/lock-app/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
                   #     /tmp/output_binaries/$BUILD_TYPE-build/chip-lock.elf
                   # cp examples/shell/nrfconnect/build/nrf52840dk_nrf52840/zephyr/zephyr.elf \
                   #     /tmp/output_binaries/$BUILD_TYPE-build/chip-shell.elf
@@ -118,8 +118,8 @@ jobs:
                   name:
                       ${{ env.BUILD_TYPE }}-example-build-${{
                       steps.outsuffix.outputs.value }}
-                  path: /tmp/output_binaries/
-                  #path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
+                  #path: /tmp/output_binaries/
+                  path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
                   #path: examples/lighting-app/nrfconnect/build/
                         
 
