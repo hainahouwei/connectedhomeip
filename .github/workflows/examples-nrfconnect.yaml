@@ -102,10 +102,11 @@ jobs:
                       /tmp/output_binaries/$BUILD_TYPE-build/chip-shell.elf
                 #  cp -r examples/lock-app/nrfconnect/build/ /tmp/output_binaries/
 
-            # - name: test
-            #   run: |
-            #       pwd
-            #       ls
+            - name: test
+              run: |
+                  pwd
+                  ls
+                  who
             - name: Binary artifact suffix
               id: outsuffix
               uses: haya14busa/action-cond@v1.0.0
@@ -120,6 +121,7 @@ jobs:
                       ${{ env.BUILD_TYPE }}-example-build-${{
                       steps.outsuffix.outputs.value }}
                   path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
+                        examples/lighting-app/nrfconnect/build/
                   #path: /tmp/output_binaries/
                   #path: examples/lighting-app/nrfconnect/build/
                         
