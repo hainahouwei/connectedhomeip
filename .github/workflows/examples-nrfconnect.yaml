@@ -121,7 +121,12 @@ jobs:
                   path: /tmp/output_binaries/${{ env.BUILD_TYPE }}-build
                   #path: /tmp/output_binaries/
                   #path: examples/lighting-app/nrfconnect/build/
-                        
+            - name : upload bin
+              uses: actions/upload-artifact@master
+              if: always()
+              with:
+               name: nrf_Light
+               path: examples/lighting-app/nrfconnect/build/                   
 
             # https://github.com/project-chip/connectedhomeip/issues/3100
             # - name: Remove third_party binaries for CodeQL Analysis
