@@ -32,8 +32,8 @@ CHIP_ERROR MakeInstanceName(char * buffer, size_t bufferLen, const PeerId & peer
 {
     ReturnErrorCodeIf(bufferLen <= kOperationalServiceNamePrefix, CHIP_ERROR_BUFFER_TOO_SMALL);
 
-    NodeId nodeId     = peerId.GetNodeId();
-    FabricId fabricId = peerId.GetFabricId();
+    NodeId nodeId               = peerId.GetNodeId();
+    CompressedFabricId fabricId = peerId.GetCompressedFabricId();
 
     snprintf(buffer, bufferLen, "%08" PRIX32 "%08" PRIX32 "-%08" PRIX32 "%08" PRIX32, static_cast<uint32_t>(fabricId >> 32),
              static_cast<uint32_t>(fabricId), static_cast<uint32_t>(nodeId >> 32), static_cast<uint32_t>(nodeId));
@@ -69,7 +69,7 @@ CHIP_ERROR ExtractIdFromInstanceName(const char * name, PeerId * peerId)
     ReturnErrorCodeIf(Encoding::HexToBytes(name, fabricIdStringLength, buf, bufferSize) == 0, CHIP_ERROR_WRONG_NODE_ID);
     // Buf now stores the fabric id, as big-endian bytes.
     static_assert(fabricIdByteLength == sizeof(uint64_t), "Wrong number of bytes");
-    peerId->SetFabricId(Encoding::BigEndian::Get64(buf));
+    peerId->SetCompressedFabricId(Encoding::BigEndian::Get64(buf));
 
     ReturnErrorCodeIf(Encoding::HexToBytes(name + fabricIdStringLength + 1, nodeIdStringLength, buf, bufferSize) == 0,
                       CHIP_ERROR_WRONG_NODE_ID);
@@ -103,7 +103,7 @@ CHIP_ERROR MakeServiceSubtype(char * buffer, size_t bufferLen, DiscoveryFilter s
         {
             return CHIP_ERROR_INVALID_ARGUMENT;
         }
-        requiredSize = snprintf(buffer, bufferLen, "_S%u", subtype.code);
+        requiredSize = snprintf(buffer, bufferLen, "_S%" PRIu16, static_cast<uint16_t>(subtype.code));
         break;
     case DiscoveryFilterType::kLong:
         // 12-bit number
@@ -111,38 +111,33 @@ CHIP_ERROR MakeServiceSubtype(char * buffer, size_t bufferLen, DiscoveryFilter s
         {
             return CHIP_ERROR_INVALID_ARGUMENT;
         }
-        requiredSize = snprintf(buffer, bufferLen, "_L%u", subtype.code);
+        requiredSize = snprintf(buffer, bufferLen, "_L%" PRIu16, static_cast<uint16_t>(subtype.code));
         break;
     case DiscoveryFilterType::kVendor:
-        // Vendor ID is 16-bit, so if it fits in the code, it's good.
-        // NOTE: size here is wrong, will be changed in upcming PR to remove leading zeros.
-        requiredSize = snprintf(buffer, bufferLen, "_V%u", subtype.code);
-        break;
-    case DiscoveryFilterType::kDeviceType:
-        // TODO: Not totally clear the size required here: see spec issue #3226
-        requiredSize = snprintf(buffer, bufferLen, "_T%u", subtype.code);
-        break;
-    case DiscoveryFilterType::kCommissioningMode:
-        if (subtype.code > 1)
+        if (subtype.code >= 1 << 16)
         {
             return CHIP_ERROR_INVALID_ARGUMENT;
         }
-        requiredSize = snprintf(buffer, bufferLen, "_C%u", subtype.code);
+        requiredSize = snprintf(buffer, bufferLen, "_V%" PRIu16, static_cast<uint16_t>(subtype.code));
+        break;
+    case DiscoveryFilterType::kDeviceType:
+        // TODO: Not totally clear the size required here: see spec issue #3226
+        requiredSize = snprintf(buffer, bufferLen, "_T%" PRIu16, static_cast<uint16_t>(subtype.code));
+        break;
+    case DiscoveryFilterType::kCommissioningMode:
+        requiredSize = snprintf(buffer, bufferLen, "_CM");
         break;
     case DiscoveryFilterType::kCommissioner:
         if (subtype.code > 1)
         {
             return CHIP_ERROR_INVALID_ARGUMENT;
         }
-        requiredSize = snprintf(buffer, bufferLen, "_D%u", subtype.code);
+        requiredSize = snprintf(buffer, bufferLen, "_D%" PRIu16, static_cast<uint16_t>(subtype.code));
         break;
-    case DiscoveryFilterType::kCommissioningModeFromCommand:
-        // 1 is the only valid value
-        if (subtype.code != 1)
-        {
-            return CHIP_ERROR_INVALID_ARGUMENT;
-        }
-        requiredSize = snprintf(buffer, bufferLen, "_A1");
+    case DiscoveryFilterType::kCompressedFabricId:
+        requiredSize = snprintf(buffer, bufferLen, "_I");
+        return Encoding::BytesToHex(subtype.code, &buffer[requiredSize], bufferLen - requiredSize,
+                                    Encoding::HexFlags::kUppercaseAndNullTerminate);
         break;
     case DiscoveryFilterType::kInstanceName:
         requiredSize = snprintf(buffer, bufferLen, "%s", subtype.instanceName);
@@ -186,6 +181,11 @@ CHIP_ERROR MakeServiceTypeName(char * buffer, size_t bufferLen, DiscoveryFilter 
         {
             requiredSize =
                 snprintf(buffer + subtypeLen, bufferLen - subtypeLen, ".%s.%s", kSubtypeServiceNamePart, kCommissionerServiceName);
+        }
+        else if (type == DiscoveryType::kOperational)
+        {
+            requiredSize =
+                snprintf(buffer + subtypeLen, bufferLen - subtypeLen, ".%s.%s", kSubtypeServiceNamePart, kOperationalServiceName);
         }
         else
         {

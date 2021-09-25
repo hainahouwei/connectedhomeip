@@ -2,10 +2,10 @@
 
 #include <nlunit-test.h>
 
-#include <support/BufferWriter.h>
-#include <support/CHIPMem.h>
-#include <support/CodeUtils.h>
-#include <support/UnitTestRegistration.h>
+#include <lib/support/BufferWriter.h>
+#include <lib/support/CHIPMem.h>
+#include <lib/support/CodeUtils.h>
+#include <lib/support/UnitTestRegistration.h>
 #include <transport/TransportMgr.h>
 #include <transport/raw/MessageHeader.h>
 #include <transport/raw/UDP.h>
@@ -113,7 +113,7 @@ void TestUDCServerInstanceNameResolver(nlTestSuite * inSuite, void * inContext)
 
     // setup for tests
     DeviceTransportMgr * mUdcTransportMgr = chip::Platform::New<DeviceTransportMgr>();
-    mUdcTransportMgr->SetSecureSessionMgr(&udcServer);
+    mUdcTransportMgr->SetSessionManager(&udcServer);
     udcServer.SetInstanceNameResolver(&testCallback);
 
     // set state for instance1

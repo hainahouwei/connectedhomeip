@@ -204,8 +204,12 @@ commissioning and cluster control.
          - chip-device-ctrl > close-ble
 
 -   Resolve DNS-SD name and update address of the node in the device controller.
+    Get fabric ID using `get-fabricid` and use the decimal value of compressed
+    fabric id.
 
-         - chip-device-ctrl > resolve 0 135246
+         - chip-device-ctrl > get-fabricid
+
+         - chip-device-ctrl > resolve <Compressed Fabric ID> 135246
 
 ### Cluster control
 
@@ -220,7 +224,7 @@ commissioning and cluster control.
 
     `chip-device-ctrl > zcl LevelControl MoveToLevel 135246 1 1 level=10 transitionTime=0 optionMask=0 optionOverride=0`
 
--   For ESP32C3-DevKitM, use the ColorContorl cluster commands to control the
+-   For ESP32C3-DevKitM, use the ColorControl cluster commands to control the
     CurrentHue and CurrentSaturation attribute. This allows you to control the
     color of on-board LED.
 
@@ -281,3 +285,6 @@ From within the console you can then invoke rpcs:
 
     rpcs.chip.rpc.Wifi.Connect(ssid=b"MySSID", secret=b"MyPASSWORD")
     rpcs.chip.rpc.Wifi.GetIP6Address()
+
+    rpcs.chip.rpc.Lighting.Get()
+    rpcs.chip.rpc.Lighting.Set(on=True, level=128, color=protos.chip.rpc.LightingColor(hue=5, saturation=5))

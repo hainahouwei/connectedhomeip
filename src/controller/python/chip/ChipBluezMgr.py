@@ -27,9 +27,7 @@ from __future__ import print_function
 import dbus
 import dbus.service
 import dbus.mainloop.glib
-import gc
 import logging
-import pprint
 import sys
 import threading
 import time
@@ -45,22 +43,9 @@ except Exception as ex:
     logging.exception("Unable to find GObject from gi.repository")
     from pgi.repository import GObject
 
-from .ChipUtility import ChipUtility
-
 from .ChipBleUtility import (
-    BLE_SUBSCRIBE_OPERATION_SUBSCRIBE,
-    BLE_SUBSCRIBE_OPERATION_UNSUBSCRIBE,
     BLE_ERROR_REMOTE_DEVICE_DISCONNECTED,
-    VoidPtrToUUIDString,
-    BleTxEvent,
     BleDisconnectEvent,
-    BleRxEvent,
-    BleSubscribeEvent,
-    BleTxEventStruct,
-    BleDisconnectEventStruct,
-    BleRxEventStruct,
-    BleSubscribeEventStruct,
-    BleDeviceIdentificationInfo,
     ParseServiceData,
 )
 
@@ -859,9 +844,9 @@ class BluezManager(ChipBleBase):
                     self.bluez, self.bus, ADAPTER_INTERFACE, "/org/bluez"
                 )
             ]
-            for i in range(len(adapters)):
+            for adapter in adapters:
                 self.logger.info("AdapterName: %s   AdapterAddress: %s" % (
-                    adapters[i].path.replace("/org/bluez/", ""), adapters[i].Address))
+                    adapter.path.replace("/org/bluez/", ""), adapter.Address))
         except dbus.exceptions.DBusException as ex:
             self.logger.debug(str(ex))
 

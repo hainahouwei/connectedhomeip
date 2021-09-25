@@ -17,9 +17,9 @@
 
 #include "lib/mdns/platform/Mdns.h"
 
+#include <lib/support/CodeUtils.h>
 #include <platform/CHIPDeviceLayer.h>
 #include <platform/OpenThread/OpenThreadUtils.h>
-#include <support/CodeUtils.h>
 
 using namespace ::chip::DeviceLayer;
 
@@ -29,6 +29,11 @@ namespace Mdns {
 CHIP_ERROR ChipMdnsInit(MdnsAsyncReturnCallback initCallback, MdnsAsyncReturnCallback errorCallback, void * context)
 {
     // Intentionally empty
+    return CHIP_NO_ERROR;
+}
+
+CHIP_ERROR ChipMdnsShutdown()
+{
     return CHIP_NO_ERROR;
 }
 

@@ -20,8 +20,8 @@
 #include <app/CommandSender.h>
 #include <app/InteractionModelEngine.h>
 #include <controller/python/chip/interaction_model/Delegate.h>
-#include <support/TypeTraits.h>
-#include <support/logging/CHIPLogging.h>
+#include <lib/support/TypeTraits.h>
+#include <lib/support/logging/CHIPLogging.h>
 
 using namespace chip::app;
 using namespace chip::Controller;
@@ -103,7 +103,7 @@ CHIP_ERROR PythonInteractionModelDelegate::WriteResponseStatus(const app::WriteC
 }
 
 void PythonInteractionModelDelegate::OnReportData(const app::ReadClient * apReadClient, const app::ClusterInfo & aPath,
-                                                  TLV::TLVReader * apData, Protocols::InteractionModel::ProtocolCode status)
+                                                  TLV::TLVReader * apData, Protocols::InteractionModel::Status status)
 {
     if (onReportDataFunct != nullptr)
     {
@@ -126,8 +126,9 @@ void PythonInteractionModelDelegate::OnReportData(const app::ReadClient * apRead
         {
             AttributePath path{ .endpointId = aPath.mEndpointId, .clusterId = aPath.mClusterId, .fieldId = aPath.mFieldId };
             onReportDataFunct(apReadClient->GetExchangeContext()->GetSecureSession().GetPeerNodeId(),
-                              apReadClient->GetAppIdentifier(), &path, sizeof(path), writerBuffer, writer.GetLengthWritten(),
-                              to_underlying(status));
+                              apReadClient->GetAppIdentifier(),
+                              /* TODO: Use real SubscriptionId */ apReadClient->IsSubscriptionType() ? 1 : 0, &path, sizeof(path),
+                              writerBuffer, writer.GetLengthWritten(), to_underlying(status));
         }
         else
         {

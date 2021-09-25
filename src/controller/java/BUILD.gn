@@ -37,13 +37,14 @@ shared_library("jni") {
     "AndroidKeyValueStoreManagerImpl.h",
     "CHIPDeviceController-JNI.cpp",
     "CHIPJNIError.h",
+    "CHIPMdnsCallbackImpl-JNI.cpp",
     "JniReferences.cpp",
     "JniReferences.h",
     "JniTypeWrappers.h",
     "MdnsImpl.cpp",
     "MdnsImpl.h",
     "StackLock.h",
-    "gen/CHIPClusters-JNI.cpp",
+    "zap-generated/CHIPClusters-JNI.cpp",
   ]
 
   deps = [
@@ -59,13 +60,14 @@ shared_library("jni") {
 android_library("java") {
   output_name = "CHIPController.jar"
 
+  deps = [ ":android" ]
+
   data_deps = [
     ":jni",
     "${chip_root}/build/chip/java:shared_cpplib",
   ]
 
   sources = [
-    "gen/ChipClusters.java",
     "src/chip/devicecontroller/AndroidChipStack.java",
     "src/chip/devicecontroller/ChipClusterException.java",
     "src/chip/devicecontroller/ChipCommandType.java",
@@ -73,13 +75,20 @@ android_library("java") {
     "src/chip/devicecontroller/ChipDeviceControllerException.java",
     "src/chip/devicecontroller/GetConnectedDeviceCallbackJni.java",
     "src/chip/devicecontroller/KeyValueStoreManager.java",
-    "src/chip/devicecontroller/NsdManagerServiceResolver.java",
     "src/chip/devicecontroller/PreferencesKeyValueStoreManager.java",
-    "src/chip/devicecontroller/ServiceResolver.java",
+    "src/chip/devicecontroller/mdns/ChipMdnsCallback.java",
+    "src/chip/devicecontroller/mdns/ChipMdnsCallbackImpl.java",
+    "src/chip/devicecontroller/mdns/NsdManagerServiceResolver.java",
+    "src/chip/devicecontroller/mdns/ServiceResolver.java",
+    "zap-generated/chip/devicecontroller/ChipClusters.java",
   ]
 
   javac_flags = [ "-Xlint:deprecation" ]
 
   # TODO: add classpath support (we likely need to add something like
   #  ..../platforms/android-21/android.jar to access BLE items)
+}
+
+java_prebuilt("android") {
+  jar_path = "${android_sdk_root}/platforms/android-21/android.jar"
 }

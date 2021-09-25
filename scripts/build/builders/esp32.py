@@ -32,6 +32,7 @@ class Esp32App(Enum):
     LOCK = auto()
     SHELL = auto()
     BRIDGE = auto()
+    TEMPERATURE_MEASUREMENT = auto()
 
     @property
     def ExampleName(self):
@@ -43,6 +44,8 @@ class Esp32App(Enum):
             return 'shell'
         elif self == Esp32App.BRIDGE:
             return 'bridge-app'
+        elif self == Esp32App.TEMPERATURE_MEASUREMENT:
+            return 'temperature-measurement-app'
         else:
             raise Exception('Unknown app type: %r' % self)
 
@@ -56,8 +59,13 @@ class Esp32App(Enum):
             return 'chip-shell'
         elif self == Esp32App.BRIDGE:
             return 'chip-bridge-app'
+        elif self == Esp32App.TEMPERATURE_MEASUREMENT:
+            return 'chip-temperature-measurement-app'
         else:
             raise Exception('Unknown app type: %r' % self)
+
+    def FlashBundleName(self):
+        return self.AppNamePrefix + '.flashbundle.txt'
 
 
 def DefaultsFileName(board: Esp32Board, app: Esp32App):
@@ -124,3 +132,9 @@ class Esp32Builder(Builder):
             self.app.AppNamePrefix + '.map':
                 os.path.join(self.output_dir, self.app.AppNamePrefix + '.map'),
         }
+
+    def flashbundle(self):
+        with open(os.path.join(self.output_dir, self.app.FlashBundleName()), 'r') as fp:
+            return {
+                l.strip(): os.path.join(self.output_dir, l.strip()) for l in fp.readlines() if l.strip()
+            }

@@ -16,7 +16,7 @@
  */
 
 // Import helpers from zap core
-const zapPath      = '../../../../../third_party/zap/repo/src-electron/';
+const zapPath      = '../../../../../third_party/zap/repo/dist/src-electron/';
 const templateUtil = require(zapPath + 'generator/template-util.js')
 const zclHelper    = require(zapPath + 'generator/helper-zcl.js')
 const zclQuery     = require(zapPath + 'db/query-zcl.js')
@@ -136,7 +136,7 @@ function asReadType(type)
 // List of all cluster with generated functions
 var endpointClusterWithInit = [
   'Basic', 'Identify', 'Groups', 'Scenes', 'Occupancy Sensing', 'On/Off', 'Level Control', 'Color Control', 'IAS Zone',
-  'Pump Configuration and Control'
+  'Pump Configuration and Control', 'Ethernet Network Diagnostics', 'Software Diagnostics'
 ];
 var endpointClusterWithAttributeChanged = [ 'Identify', 'Door Lock', 'Pump Configuration and Control' ];
 var endpointClusterWithPreAttribute     = [ 'IAS Zone' ];

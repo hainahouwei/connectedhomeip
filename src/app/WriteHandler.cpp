@@ -21,7 +21,7 @@
 #include <app/MessageDef/EventPath.h>
 #include <app/WriteHandler.h>
 #include <app/reporting/Engine.h>
-#include <support/TypeTraits.h>
+#include <lib/support/TypeTraits.h>
 
 namespace chip {
 namespace app {
@@ -62,7 +62,6 @@ CHIP_ERROR WriteHandler::OnWriteRequest(Messaging::ExchangeContext * apExchangeC
     err = SendWriteResponse();
 
 exit:
-    ChipLogFunctError(err);
     Shutdown();
     return err;
 }
@@ -84,7 +83,6 @@ CHIP_ERROR WriteHandler::FinalizeMessage(System::PacketBufferHandle & packet)
     SuccessOrExit(err);
 
 exit:
-    ChipLogFunctError(err);
     return err;
 }
 
@@ -105,7 +103,6 @@ CHIP_ERROR WriteHandler::SendWriteResponse()
     MoveToState(State::Sending);
 
 exit:
-    ChipLogFunctError(err);
     return err;
 }
 
@@ -164,7 +161,6 @@ CHIP_ERROR WriteHandler::ProcessAttributeDataList(TLV::TLVReader & aAttributeDat
     }
 
 exit:
-    ChipLogFunctError(err);
     return err;
 }
 
@@ -203,7 +199,6 @@ CHIP_ERROR WriteHandler::ProcessWriteRequest(System::PacketBufferHandle && aPayl
     err = ProcessAttributeDataList(attributeDataListReader);
 
 exit:
-    ChipLogFunctError(err);
     return err;
 }
 
@@ -231,8 +226,7 @@ CHIP_ERROR WriteHandler::ConstructAttributePath(const AttributePathParams & aAtt
 
 CHIP_ERROR WriteHandler::AddAttributeStatusCode(const AttributePathParams & aAttributePathParams,
                                                 const Protocols::SecureChannel::GeneralStatusCode aGeneralCode,
-                                                const Protocols::Id aProtocolId,
-                                                const Protocols::InteractionModel::ProtocolCode aProtocolCode)
+                                                const Protocols::Id aProtocolId, const Protocols::InteractionModel::Status aStatus)
 {
     CHIP_ERROR err = CHIP_NO_ERROR;
     StatusElement::Builder statusElementBuilder;
@@ -245,8 +239,7 @@ CHIP_ERROR WriteHandler::AddAttributeStatusCode(const AttributePathParams & aAtt
     SuccessOrExit(err);
 
     statusElementBuilder = attributeStatusElement.CreateStatusElementBuilder();
-    statusElementBuilder
-        .EncodeStatusElement(aGeneralCode, aProtocolId.ToFullyQualifiedSpecForm(), chip::to_underlying(aProtocolCode))
+    statusElementBuilder.EncodeStatusElement(aGeneralCode, aProtocolId.ToFullyQualifiedSpecForm(), chip::to_underlying(aStatus))
         .EndOfStatusElement();
     err = statusElementBuilder.GetError();
     SuccessOrExit(err);
@@ -257,7 +250,6 @@ CHIP_ERROR WriteHandler::AddAttributeStatusCode(const AttributePathParams & aAtt
     MoveToState(State::AddAttributeStatusCode);
 
 exit:
-    ChipLogFunctError(err);
     return err;
 }
 

@@ -17,17 +17,17 @@
 
 #pragma once
 
-#include <core/CHIPError.h>
-#include <core/PeerId.h>
-#include <mdns/Resolver.h>
-#include <support/Span.h>
+#include <lib/core/CHIPError.h>
+#include <lib/core/PeerId.h>
+#include <lib/mdns/Resolver.h>
+#include <lib/support/Span.h>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace chip {
 namespace Mdns {
-constexpr size_t kMaxSubtypeDescSize           = 16; // max 16 char service name
+constexpr size_t kMaxSubtypeDescSize           = 19; // _I service subtype = 16 chars for 64-bit id, + 2 for "_I" + nullchar
 constexpr char kSubtypeServiceNamePart[]       = "_sub";
 constexpr char kCommissionableServiceName[]    = "_matterc";
 constexpr char kOperationalServiceName[]       = "_matter";

@@ -27,7 +27,7 @@
 #include <platform/CHIPDeviceLayer.h>
 #include <protocols/secure_channel/PASESession.h>
 #include <system/SystemPacketBuffer.h>
-#include <transport/SecureSessionMgr.h>
+#include <transport/SessionManager.h>
 #include <transport/raw/TCP.h>
 #include <transport/raw/UDP.h>
 
@@ -98,8 +98,8 @@ private:
 class MockAppDelegate : public Messaging::ExchangeDelegate
 {
 public:
-    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader,
-                                 const PayloadHeader & payloadHeader, System::PacketBufferHandle && buffer) override
+    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PayloadHeader & payloadHeader,
+                                 System::PacketBufferHandle && buffer) override
     {
         uint32_t respTime    = System::Clock::GetMonotonicMilliseconds();
         uint32_t transitTime = respTime - gSendArguments.GetLastSendTime();
@@ -127,7 +127,7 @@ CHIP_ERROR SendMessage(streamer_t * stream)
     uint32_t payloadSize = gSendArguments.GetPayloadSize();
 
     // Create a new exchange context.
-    auto * ec = gExchangeManager.NewContext({ kTestDeviceNodeId, 0, gFabricIndex }, &gMockAppDelegate);
+    auto * ec = gExchangeManager.NewContext(SessionHandle(kTestDeviceNodeId, 0, 0, gFabricIndex), &gMockAppDelegate);
     VerifyOrExit(ec != nullptr, err = CHIP_ERROR_NO_MEMORY);
 
     payloadBuf = MessagePacketBuffer::New(payloadSize);
@@ -180,7 +180,7 @@ CHIP_ERROR EstablishSecureSession(streamer_t * stream, Transport::PeerAddress & 
     peerAddr = Optional<Transport::PeerAddress>::Value(peerAddress);
 
     // Attempt to connect to the peer.
-    err = gSessionManager.NewPairing(peerAddr, kTestDeviceNodeId, testSecurePairingSecret, SecureSession::SessionRole::kInitiator,
+    err = gSessionManager.NewPairing(peerAddr, kTestDeviceNodeId, testSecurePairingSecret, CryptoContext::SessionRole::kInitiator,
                                      gFabricIndex);
 
 exit:
@@ -227,7 +227,7 @@ void ProcessCommand(streamer_t * stream, char * destination)
     {
         peerAddress = Transport::PeerAddress::TCP(gDestAddr, gSendArguments.GetPort());
 
-        err = gSessionManager.Init(&DeviceLayer::SystemLayer, &gTCPManager, &fabrics, &gMessageCounterManager);
+        err = gSessionManager.Init(&DeviceLayer::SystemLayer(), &gTCPManager, &fabrics, &gMessageCounterManager);
         SuccessOrExit(err);
     }
     else
@@ -235,7 +235,7 @@ void ProcessCommand(streamer_t * stream, char * destination)
     {
         peerAddress = Transport::PeerAddress::UDP(gDestAddr, gSendArguments.GetPort(), INET_NULL_INTERFACEID);
 
-        err = gSessionManager.Init(&DeviceLayer::SystemLayer, &gUDPManager, &fabrics, &gMessageCounterManager);
+        err = gSessionManager.Init(&DeviceLayer::SystemLayer(), &gUDPManager, &fabrics, &gMessageCounterManager);
         SuccessOrExit(err);
     }
 

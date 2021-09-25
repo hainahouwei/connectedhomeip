@@ -48,7 +48,7 @@ jobs:
               run: scripts/build/gn_bootstrap.sh
             - name: Uploading bootstrap logs
               uses: actions/upload-artifact@v2
-              if: ${{ always() }}
+              if: ${{ always() }} && ${{ !env.ACT }}
               with:
                   name: bootstrap-logs
                   path: |
@@ -57,6 +57,7 @@ jobs:
             - name: Build android examples
               run: |
                 ./scripts/run_in_build_env.sh \
+<<<<<<< HEAD
                   "./scripts/build/build_examples.py --platform android build"
             - name : upload apk
               uses: actions/upload-artifact@v2
@@ -66,3 +67,10 @@ jobs:
                 path: out/android-x64-chip_tool/outputs/apk/debug/app-debug.apk
                       # out/android-arm-chip_tool/outputs/apk/debug/app-debug.apk
                       # out/android-arm64-chip_tool/outputs/apk/debug/app-debug.apk
+=======
+                  "./scripts/build/build_examples.py --no-log-timestamps --platform android build"
+            - name: Run Android build rule tests
+              run: |
+                ./scripts/run_in_build_env.sh \
+                  "ninja -C out/android-arm64-chip_tool build/chip/java/tests:java_build_test.tests"
+>>>>>>> bb7e53f2177d5a1e43744c1f0f6a5a593e8312b8

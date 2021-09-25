@@ -36,6 +36,7 @@ TEST_THREAD_NETWORK_DATASET_TLV = "0e080000000000010000" + \
     "041081cb3b2efa781cc778397497ff520fa50c0302a0ff"
 # Network id, for the thread network, current a const value, will be changed to XPANID of the thread network.
 TEST_THREAD_NETWORK_ID = "fedcba9876543210"
+TEST_DISCRIMINATOR = 3840
 
 ENDPOINT_ID = 0
 LIGHTING_ENDPOINT_ID = 1
@@ -71,6 +72,10 @@ def main():
     timeoutTicker.start()
 
     test = BaseTestHelper(nodeid=112233)
+
+    logger.info("Testing discovery")
+    FailIfNot(test.TestDiscovery(discriminator=TEST_DISCRIMINATOR),
+              "Failed to discover any devices.")
 
     logger.info("Testing key exchange")
     FailIfNot(test.TestKeyExchange(ip=options.deviceAddress,
@@ -108,8 +113,21 @@ def main():
                                             group=GROUP_ID),
               "Failed to test Write Basic Attributes")
 
+    logger.info("Testing subscription")
+    FailIfNot(test.TestSubscription(nodeid=1, endpoint=LIGHTING_ENDPOINT_ID),
+              "Failed to subscribe attributes.")
+
     logger.info("Testing closing sessions")
     FailIfNot(test.TestCloseSession(nodeid=1), "Failed to close sessions")
+
+    logger.info("Testing resolve")
+    FailIfNot(test.TestResolve(nodeid=1),
+              "Failed to resolve nodeid")
+
+    logger.info("Testing on off cluster over resolved connection")
+    FailIfNot(test.TestOnOffCluster(nodeid=1,
+                                    endpoint=LIGHTING_ENDPOINT_ID,
+                                    group=GROUP_ID), "Failed to test on off cluster")
 
     logger.info("Testing non-controller APIs")
     FailIfNot(test.TestNonControllerAPIs(), "Non controller API test failed")

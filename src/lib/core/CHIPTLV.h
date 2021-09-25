@@ -27,13 +27,13 @@
 
 #pragma once
 
-#include <core/CHIPError.h>
-#include <core/CHIPTLVTags.h>
-#include <core/CHIPTLVTypes.h>
+#include <lib/core/CHIPError.h>
+#include <lib/core/CHIPTLVTags.h>
+#include <lib/core/CHIPTLVTypes.h>
 
-#include <support/DLLUtil.h>
-#include <support/Span.h>
-#include <support/TypeTraits.h>
+#include <lib/support/DLLUtil.h>
+#include <lib/support/Span.h>
+#include <lib/support/TypeTraits.h>
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -845,6 +845,75 @@ protected:
 };
 
 /**
+ * A TLVReader that is guaranteed to be backed by a single contiguous buffer.
+ * This allows it to expose some additional methods that allow consumers to
+ * directly access the data in that buffer in a safe way that is guaranteed to
+ * work as long as the reader object stays in scope.
+ */
+class ContiguousBufferTLVReader : public TLVReader
+{
+public:
+    ContiguousBufferTLVReader() : TLVReader() {}
+
+    /**
+     * Init with input buffer as ptr + length pair.
+     */
+    void Init(const uint8_t * data, size_t dataLen) { TLVReader::Init(data, dataLen); }
+
+    /**
+     * Init with input buffer as ByteSpan.
+     */
+    void Init(const ByteSpan & data) { Init(data.data(), data.size()); }
+
+    /**
+     * Init with input buffer as byte array.
+     */
+    template <size_t N>
+    void Init(const uint8_t (&data)[N])
+    {
+        Init(data, N);
+    }
+
+    /**
+     * Allow opening a container, with a new ContiguousBufferTLVReader reading
+     * that container.  See TLVReader::OpenContainer for details.
+     */
+    CHIP_ERROR OpenContainer(ContiguousBufferTLVReader & containerReader);
+
+    /**
+     * Get the value of the current UTF8 string as a Span<const char> pointing
+     * into the TLV data.  Consumers may need to copy the data elsewhere as
+     * needed (e.g. before releasing the reader and its backing buffer if they
+     * plan to use the data after that point).
+     *
+     * @param[out] data                     A Span<const char> representing the string data.
+     *
+     * @retval #CHIP_NO_ERROR              If the method succeeded.
+     * @retval #CHIP_ERROR_WRONG_TLV_TYPE  If the current element is not a TLV UTF8 string, or
+     *                                      the reader is not positioned on an element.
+     * @retval #CHIP_ERROR_TLV_UNDERRUN    If the underlying TLV encoding ended prematurely (i.e. the string length was "too big").
+     *
+     */
+    CHIP_ERROR GetStringView(Span<const char> & data);
+
+    /**
+     * Get the value of the current octet string as a ByteSpan pointing into the
+     * TLV data.  Consumers may need to copy the data elsewhere as needed
+     * (e.g. before releasing the reader and its backing buffer if they plan to
+     * use the data after that point).
+     *
+     * @param[out] data                     A ByteSpan representing the string data.
+     *
+     * @retval #CHIP_NO_ERROR              If the method succeeded.
+     * @retval #CHIP_ERROR_WRONG_TLV_TYPE  If the current element is not a TLV octet string, or
+     *                                      the reader is not positioned on an element.
+     * @retval #CHIP_ERROR_TLV_UNDERRUN    If the underlying TLV encoding ended prematurely (i.e. the string length was "too big").
+     *
+     */
+    CHIP_ERROR GetByteView(ByteSpan & data);
+};
+
+/**
  * Provides a memory efficient encoder for writing data in CHIP TLV format.
  *
  * TLVWriter implements a forward-only, stream-style encoder for CHIP TLV data.  Applications
@@ -1298,6 +1367,34 @@ public:
      *
      */
     CHIP_ERROR PutString(uint64_t tag, const char * buf, uint32_t len);
+
+    /**
+     * Encodes a TLV UTF8 string value that's passed in as a Span.
+     *
+     * @param[in]   tag             The TLV tag to be encoded with the value, or @p AnonymousTag if the
+     *                              value should be encoded without a tag.  Tag values should be
+     *                              constructed with one of the tag definition functions ProfileTag(),
+     *                              ContextTag() or CommonTag().
+     * @param[in]   str             A Span containing a pointer and a length of the string to be encoded.
+     *
+     * @retval #CHIP_NO_ERROR      If the method succeeded.
+     * @retval #CHIP_ERROR_TLV_CONTAINER_OPEN
+     *                              If a container writer has been opened on the current writer and not
+     *                              yet closed.
+     * @retval #CHIP_ERROR_INVALID_TLV_TAG
+     *                              If the specified tag value is invalid or inappropriate in the context
+     *                              in which the value is being written.
+     * @retval #CHIP_ERROR_BUFFER_TOO_SMALL
+     *                              If writing the value would exceed the limit on the maximum number of
+     *                              bytes specified when the writer was initialized.
+     * @retval #CHIP_ERROR_NO_MEMORY
+     *                              If an attempt to allocate an output buffer failed due to lack of
+     *                              memory.
+     * @retval other                Other CHIP or platform-specific errors returned by the configured
+     *                              TLVBackingStore.
+     *
+     */
+    CHIP_ERROR PutString(uint64_t tag, Span<const char> str);
 
     /**
      * @brief
@@ -2252,6 +2349,7 @@ public:
     CHIP_ERROR Get(float & v) { return mUpdaterReader.Get(v); }
     CHIP_ERROR Get(double & v) { return mUpdaterReader.Get(v); }
     CHIP_ERROR Get(chip::ByteSpan & v) { return mUpdaterReader.Get(v); }
+
     CHIP_ERROR GetBytes(uint8_t * buf, uint32_t bufSize) { return mUpdaterReader.GetBytes(buf, bufSize); }
     CHIP_ERROR DupBytes(uint8_t *& buf, uint32_t & dataLen) { return mUpdaterReader.DupBytes(buf, dataLen); }
     CHIP_ERROR GetString(char * buf, uint32_t bufSize) { return mUpdaterReader.GetString(buf, bufSize); }

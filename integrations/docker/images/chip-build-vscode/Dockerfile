@@ -7,6 +7,7 @@ FROM connectedhomeip/chip-build-mbed-os:${VERSION} AS mbedos
 FROM connectedhomeip/chip-build-telink:${VERSION} AS telink
 FROM connectedhomeip/chip-build-infineon:${VERSION} AS p6
 FROM connectedhomeip/chip-build-tizen:${VERSION} AS tizen
+FROM connectedhomeip/chip-build-crosscompile:${VERSION} AS crosscompile
 FROM connectedhomeip/chip-build:${VERSION}
 
 # qemu-src copied over because qemu directory contains symlinks to the src
@@ -28,19 +29,12 @@ COPY --from=mbedos /opt/openocd/ /opt/openocd/
 
 COPY --from=p6 /opt/ModusToolbox /opt/ModusToolbox
 
-COPY --from=telink /opt/zephyrproject /opt/telink/zephyrproject
-COPY --from=telink /opt/telink/telink_riscv_linux_toolchain /opt/telink/telink_riscv_linux_toolchain
+COPY --from=telink /opt/telink/zephyrproject /opt/telink/zephyrproject
+COPY --from=telink /opt/telink/zephyr-sdk-0.13.0 /opt/telink/zephyr-sdk-0.13.0
 
 COPY --from=tizen /opt/tizen_sdk /opt/tizen_sdk
 
-# Telink toolchain dependency. Will be removed as soon as Telink platform
-# migrates to zephyr-sdk toolchain
-RUN dpkg --add-architecture i386 \
-    && apt-get update \
-    && apt-get install -y \
-    libc6:i386 \
-    libncurses5:i386 \
-    libstdc++6:i386
+COPY --from=crosscompile /opt/ubuntu-21.04-aarch64-sysroot /opt/ubuntu-21.04-aarch64-sysroot
 
 # Android license file "acceping" is done by writing license hashes
 # into the 'licenses' subfolder. This allows any user (in particular
@@ -65,6 +59,7 @@ ENV MBED_OS_PATH=/opt/mbed-os/
 ENV OPENOCD_PATH=/opt/openocd/
 ENV PW_ENVIRONMENT_ROOT=/home/vscode/pigweed/env
 ENV TELINK_ZEPHYR_BASE=/opt/telink/zephyrproject/zephyr
-ENV TELINK_TOOLCHAIN_PATH=/opt/telink/telink_riscv_linux_toolchain/nds32le-elf-mculib-v5f/bin
+ENV TELINK_ZEPHYR_SDK_DIR=/opt/telink/zephyr-sdk-0.13.0
 ENV CY_TOOLS_PATHS="/opt/ModusToolbox/tools_2.3"
 ENV TIZEN_HOME /opt/tizen_sdk
+ENV SYSROOT_AARCH64=/opt/ubuntu-21.04-aarch64-sysroot

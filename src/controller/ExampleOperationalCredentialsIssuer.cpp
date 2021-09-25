@@ -16,14 +16,15 @@
  *    limitations under the License.
  */
 
+#include <algorithm>
 #include <controller/ExampleOperationalCredentialsIssuer.h>
-#include <core/CHIPTLV.h>
 #include <credentials/CHIPCert.h>
-#include <support/CHIPMem.h>
-#include <support/CodeUtils.h>
-#include <support/PersistentStorageMacros.h>
-#include <support/SafeInt.h>
-#include <support/ScopedBuffer.h>
+#include <lib/core/CHIPTLV.h>
+#include <lib/support/CHIPMem.h>
+#include <lib/support/CodeUtils.h>
+#include <lib/support/PersistentStorageMacros.h>
+#include <lib/support/SafeInt.h>
+#include <lib/support/ScopedBuffer.h>
 
 namespace chip {
 namespace Controller {

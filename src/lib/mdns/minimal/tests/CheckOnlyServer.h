@@ -15,21 +15,21 @@
  *    limitations under the License.
  */
 #pragma once
-#include <mdns/minimal/ResponseSender.h>
+#include <lib/mdns/minimal/ResponseSender.h>
 
 #include <chrono>
 #include <condition_variable>
 #include <string>
 #include <vector>
 
-#include <mdns/MinimalMdnsServer.h>
-#include <mdns/minimal/RecordData.h>
-#include <mdns/minimal/Server.h>
-#include <mdns/minimal/records/Ptr.h>
-#include <mdns/minimal/records/Srv.h>
-#include <mdns/minimal/records/Txt.h>
-#include <support/CHIPMemString.h>
-#include <support/UnitTestRegistration.h>
+#include <lib/mdns/MinimalMdnsServer.h>
+#include <lib/mdns/minimal/RecordData.h>
+#include <lib/mdns/minimal/Server.h>
+#include <lib/mdns/minimal/records/Ptr.h>
+#include <lib/mdns/minimal/records/Srv.h>
+#include <lib/mdns/minimal/records/Txt.h>
+#include <lib/support/CHIPMemString.h>
+#include <lib/support/UnitTestRegistration.h>
 #include <system/SystemMutex.h>
 
 #include <nlunit-test.h>
@@ -88,6 +88,10 @@ public:
         if (!header.GetFlags().IsTruncated())
         {
             NL_TEST_ASSERT(mInSuite, mTotalRecords == GetNumExpectedRecords());
+            if (mTotalRecords != GetNumExpectedRecords())
+            {
+                ChipLogError(Discovery, "Received %d records, expected %d", mTotalRecords, GetNumExpectedRecords());
+            }
             mHeaderFound = true;
         }
     }
@@ -299,7 +303,7 @@ private:
             found = false;
         }
     };
-    static constexpr size_t kMaxExpectedTxt = 10;
+    static constexpr size_t kMaxExpectedTxt = 11;
     KV mExpectedTxt[kMaxExpectedTxt];
     size_t mNumExpectedTxtRecords = 0;
     size_t mNumReceivedTxtRecords = 0;

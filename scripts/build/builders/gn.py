@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
 import os
+import shlex
 
 from .builder import Builder
 
@@ -30,7 +30,19 @@ class GnBuilder(Builder):
         """
         super(GnBuilder, self).__init__(root, runner, output_prefix)
 
-        self.gn_build_args = None
+    def GnBuildArgs(self):
+        """Extra gn build `--args`
+
+        If used, returns a list of arguments.
+        """
+        return None
+
+    def GnBuildEnv(self):
+        """Extra environment variables needed for the GN build to run.
+
+        If used, returns a dictionary of environment variables.
+        """
+        return None
 
     def generate(self):
         if not os.path.exists(self.output_dir):
@@ -39,12 +51,26 @@ class GnBuilder(Builder):
                 '--root=%s' % self.root
             ]
 
-            if self.gn_build_args:
-                cmd += ['--args=%s' % ' '.join(self.gn_build_args)]
+            extra_args = self.GnBuildArgs()
+            if extra_args:
+                cmd += ['--args=%s' % ' '.join(extra_args)]
 
             cmd += [self.output_dir]
 
-            self._Execute(cmd, title='Generating ' + self.identifier)
+            title = 'Generating ' + self.identifier
+            extra_env = self.GnBuildEnv()
+
+            if extra_env:
+                # convert the command into a bash command that includes
+                # setting environment variables
+                cmd = [
+                    'bash', '-c', '\n' + ' '.join(
+                        ['%s="%s" \\\n' % (key, value) for key, value in extra_env.items()] +
+                        [shlex.join(cmd)]
+                    )
+                ]
+
+            self._Execute(cmd, title=title)
 
     def _build(self):
         self._Execute(['ninja', '-C', self.output_dir],

@@ -21,11 +21,11 @@
  */
 
 #include "CHIPCryptoPAL.h"
+#include <lib/support/BufferReader.h>
+#include <lib/support/BufferWriter.h>
+#include <lib/support/CodeUtils.h>
+#include <lib/support/Span.h>
 #include <string.h>
-#include <support/BufferReader.h>
-#include <support/BufferWriter.h>
-#include <support/CodeUtils.h>
-#include <support/Span.h>
 
 using chip::ByteSpan;
 using chip::MutableByteSpan;
@@ -251,7 +251,10 @@ Spake2p::Spake2p(size_t _fe_size, size_t _point_size, size_t _hash_size)
 
 CHIP_ERROR Spake2p::Init(const uint8_t * context, size_t context_len)
 {
-    state = CHIP_SPAKE2P_STATE::PREINIT;
+    if (state != CHIP_SPAKE2P_STATE::PREINIT)
+    {
+        Clear();
+    }
 
     ReturnErrorOnFailure(InitImpl());
     ReturnErrorOnFailure(PointLoad(spake2p_M_p256, sizeof(spake2p_M_p256), M));

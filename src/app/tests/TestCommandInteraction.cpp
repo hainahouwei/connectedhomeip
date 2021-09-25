@@ -26,10 +26,13 @@
 
 #include <app/AppBuildConfig.h>
 #include <app/InteractionModelEngine.h>
-#include <core/CHIPCore.h>
-#include <core/CHIPTLV.h>
-#include <core/CHIPTLVDebug.hpp>
-#include <core/CHIPTLVUtilities.hpp>
+#include <lib/core/CHIPCore.h>
+#include <lib/core/CHIPTLV.h>
+#include <lib/core/CHIPTLVDebug.hpp>
+#include <lib/core/CHIPTLVUtilities.hpp>
+#include <lib/support/ErrorStr.h>
+#include <lib/support/UnitTestRegistration.h>
+#include <lib/support/logging/CHIPLogging.h>
 #include <messaging/ExchangeContext.h>
 #include <messaging/ExchangeMgr.h>
 #include <messaging/Flags.h>
@@ -37,19 +40,17 @@
 #include <protocols/interaction_model/Constants.h>
 #include <protocols/secure_channel/MessageCounterManager.h>
 #include <protocols/secure_channel/PASESession.h>
-#include <support/ErrorStr.h>
-#include <support/UnitTestRegistration.h>
-#include <support/logging/CHIPLogging.h>
+#include <system/SystemLayerImpl.h>
 #include <system/SystemPacketBuffer.h>
 #include <system/TLVPacketBufferBackingStore.h>
-#include <transport/SecureSessionMgr.h>
+#include <transport/SessionManager.h>
 #include <transport/raw/UDP.h>
 
 #include <nlunit-test.h>
 
 namespace chip {
-static System::Layer gSystemLayer;
-static SecureSessionMgr gSessionManager;
+static System::LayerImpl gSystemLayer;
+static SessionManager gSessionManager;
 static Messaging::ExchangeManager gExchangeManager;
 static TransportMgr<Transport::UDP> gTransportManager;
 static secure_channel::MessageCounterManager gMessageCounterManager;
@@ -78,7 +79,7 @@ void DispatchSingleClusterCommand(chip::ClusterId aClusterId, chip::CommandId aC
                   ChipLogValueMEI(aClusterId), ChipLogValueMEI(aCommandId), aEndPointId);
 
     apCommandObj->AddStatusCode(commandPathParams, Protocols::SecureChannel::GeneralStatusCode::kSuccess,
-                                Protocols::SecureChannel::Id, Protocols::InteractionModel::ProtocolCode::Success);
+                                Protocols::SecureChannel::Id, Protocols::InteractionModel::Status::Success);
 
     chip::isCommandDispatched = true;
 }
@@ -95,14 +96,6 @@ bool ServerClusterCommandExists(chip::ClusterId aClusterId, chip::CommandId aCom
 {
     // Mock cluster catalog, only support one command on one cluster on one endpoint.
     return (aEndPointId == kTestEndpointId && aClusterId == kTestClusterId && aCommandId == kTestCommandId);
-}
-
-CHIP_ERROR ReadSingleClusterData(ClusterInfo & aClusterInfo, TLV::TLVWriter * apWriter, bool * apDataExists)
-{
-    // We do not really care about the value, just return a not found status code.
-    VerifyOrReturnError(apWriter != nullptr, CHIP_NO_ERROR);
-    return apWriter->Put(chip::TLV::ContextTag(AttributeDataElement::kCsTag_Status),
-                         static_cast<uint16_t>(Protocols::InteractionModel::ProtocolCode::UnsupportedAttribute));
 }
 
 class TestCommandInteraction
@@ -130,8 +123,8 @@ private:
 
 class TestExchangeDelegate : public Messaging::ExchangeDelegate
 {
-    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PacketHeader & packetHeader,
-                                 const PayloadHeader & payloadHeader, System::PacketBufferHandle && payload) override
+    CHIP_ERROR OnMessageReceived(Messaging::ExchangeContext * ec, const PayloadHeader & payloadHeader,
+                                 System::PacketBufferHandle && payload) override
     {
         return CHIP_NO_ERROR;
     }
@@ -203,7 +196,7 @@ void TestCommandInteraction::AddCommandDataElement(nlTestSuite * apSuite, void *
     if (aNeedStatusCode)
     {
         apCommand->AddStatusCode(commandPathParams, Protocols::SecureChannel::GeneralStatusCode::kSuccess,
-                                 Protocols::SecureChannel::Id, Protocols::InteractionModel::ProtocolCode::Success);
+                                 Protocols::SecureChannel::Id, Protocols::InteractionModel::Status::Success);
     }
     else
     {
@@ -239,7 +232,7 @@ void TestCommandInteraction::TestCommandSenderWithWrongState(nlTestSuite * apSui
     err                            = commandSender.Init(&gExchangeManager, nullptr);
     NL_TEST_ASSERT(apSuite, err == CHIP_NO_ERROR);
 
-    err = commandSender.SendCommandRequest(kTestDeviceNodeId, gFabricIndex);
+    err = commandSender.SendCommandRequest(kTestDeviceNodeId, gFabricIndex, Optional<SessionHandle>::Missing());
     NL_TEST_ASSERT(apSuite, err == CHIP_ERROR_INCORRECT_STATE);
 }
 
@@ -259,7 +252,7 @@ void TestCommandInteraction::TestCommandHandlerWithWrongState(nlTestSuite * apSu
 
     err = commandHandler.Init(&chip::gExchangeManager, nullptr);
     NL_TEST_ASSERT(apSuite, err == CHIP_NO_ERROR);
-    commandHandler.mpExchangeCtx = gExchangeManager.NewContext({ 0, 0, 0 }, nullptr);
+    commandHandler.mpExchangeCtx = gExchangeManager.NewContext(SessionHandle(0, 0, 0, 0), nullptr);
     TestExchangeDelegate delegate;
     commandHandler.mpExchangeCtx->SetDelegate(&delegate);
     err = commandHandler.SendCommandResponse();
@@ -278,7 +271,7 @@ void TestCommandInteraction::TestCommandSenderWithSendCommand(nlTestSuite * apSu
     NL_TEST_ASSERT(apSuite, err == CHIP_NO_ERROR);
 
     AddCommandDataElement(apSuite, apContext, &commandSender, false);
-    err = commandSender.SendCommandRequest(kTestDeviceNodeId, gFabricIndex);
+    err = commandSender.SendCommandRequest(kTestDeviceNodeId, gFabricIndex, Optional<SessionHandle>::Missing());
     NL_TEST_ASSERT(apSuite, err == CHIP_ERROR_NOT_CONNECTED);
 
     GenerateReceivedCommand(apSuite, apContext, buf, true /*aNeedCommandData*/);
@@ -300,7 +293,7 @@ void TestCommandInteraction::TestCommandHandlerWithSendEmptyCommand(nlTestSuite 
     err                                       = commandHandler.Init(&chip::gExchangeManager, nullptr);
     NL_TEST_ASSERT(apSuite, err == CHIP_NO_ERROR);
 
-    commandHandler.mpExchangeCtx = gExchangeManager.NewContext({ 0, 0, 0 }, nullptr);
+    commandHandler.mpExchangeCtx = gExchangeManager.NewContext(SessionHandle(0, 0, 0, 0), nullptr);
 
     TestExchangeDelegate delegate;
     commandHandler.mpExchangeCtx->SetDelegate(&delegate);
@@ -337,7 +330,7 @@ void TestCommandInteraction::ValidateCommandHandlerWithSendCommand(nlTestSuite *
     err = commandHandler.Init(&chip::gExchangeManager, nullptr);
     NL_TEST_ASSERT(apSuite, err == CHIP_NO_ERROR);
 
-    commandHandler.mpExchangeCtx = gExchangeManager.NewContext({ 0, 0, 0 }, nullptr);
+    commandHandler.mpExchangeCtx = gExchangeManager.NewContext(SessionHandle(0, 0, 0, 0), nullptr);
     TestExchangeDelegate delegate;
     commandHandler.mpExchangeCtx->SetDelegate(&delegate);
 

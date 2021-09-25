@@ -21,8 +21,8 @@
 #include <controller/ExampleOperationalCredentialsIssuer.h>
 #include <crypto/CHIPCryptoPAL.h>
 #include <lib/core/CHIPSafeCasts.h>
+#include <lib/support/logging/CHIPLogging.h>
 #include <protocols/secure_channel/PASESession.h>
-#include <support/logging/CHIPLogging.h>
 
 #include <setup_payload/ManualSetupPayloadParser.h>
 #include <setup_payload/QRCodeSetupPayloadParser.h>
@@ -39,24 +39,27 @@ CHIP_ERROR PairingCommand::Run()
     GetExecContext()->commissioner->RegisterDeviceAddressUpdateDelegate(this);
     GetExecContext()->commissioner->RegisterPairingDelegate(this);
 
+    if (mPairingMode != PairingMode::OpenCommissioningWindow)
+    {
 #if CONFIG_PAIR_WITH_RANDOM_ID
-    // Generate a random remote id so we don't end up reusing the same node id
-    // for different nodes.
-    //
-    // TODO: Ideally we'd just ask for an operational cert for the commissionnee
-    // and get the node from that, but the APIs are not set up that way yet.
-    NodeId randomId;
-    ReturnErrorOnFailure(Controller::ExampleOperationalCredentialsIssuer::GetRandomOperationalNodeId(&randomId));
+        // Generate a random remote id so we don't end up reusing the same node id
+        // for different nodes.
+        //
+        // TODO: Ideally we'd just ask for an operational cert for the commissionnee
+        // and get the node from that, but the APIs are not set up that way yet.
+        NodeId randomId;
+        ReturnErrorOnFailure(Controller::ExampleOperationalCredentialsIssuer::GetRandomOperationalNodeId(&randomId));
 
-    ChipLogProgress(Controller, "Generated random node id: 0x" ChipLogFormatX64, ChipLogValueX64(randomId));
+        ChipLogProgress(Controller, "Generated random node id: 0x" ChipLogFormatX64, ChipLogValueX64(randomId));
 
-    ReturnErrorOnFailure(GetExecContext()->storage->SetRemoteNodeId(randomId));
-    GetExecContext()->remoteId = randomId;
+        ReturnErrorOnFailure(GetExecContext()->storage->SetRemoteNodeId(randomId));
+        GetExecContext()->remoteId = randomId;
 #else  // CONFIG_PAIR_WITH_RANDOM_ID
-    // Use the default id, not whatever happens to be in our storage, since this
-    // is a new pairing.
-    GetExecContext()->remoteId = kTestDeviceNodeId;
+       // Use the default id, not whatever happens to be in our storage, since this
+       // is a new pairing.
+        GetExecContext()->remoteId = kTestDeviceNodeId;
 #endif // CONFIG_PAIR_WITH_RANDOM_ID
+    }
 
     err = RunInternal(GetExecContext()->remoteId);
     VerifyOrExit(err == CHIP_NO_ERROR, ChipLogError(chipTool, "Init Failure! PairDevice: %s", ErrorStr(err)));
@@ -97,9 +100,31 @@ CHIP_ERROR PairingCommand::RunInternal(NodeId remoteId)
     case PairingMode::Ethernet:
         err = Pair(remoteId, PeerAddress::UDP(mRemoteAddr.address, mRemotePort));
         break;
+    case PairingMode::OpenCommissioningWindow:
+        err = GetExecContext()->commissioner->GetConnectedDevice(GetExecContext()->remoteId, &mOnDeviceConnectedCallback,
+                                                                 &mOnDeviceConnectionFailureCallback);
+        if (err != CHIP_NO_ERROR)
+        {
+            ChipLogError(chipTool, "Failed in initiating connection to the device: %" PRIu64 ", error %" CHIP_ERROR_FORMAT,
+                         GetExecContext()->remoteId, err.Format());
+        }
+
+        break;
     }
 
     return err;
+}
+
+void PairingCommand::OnDeviceConnectedFn(void * context, chip::Controller::Device * device)
+{
+    PairingCommand * command = reinterpret_cast<PairingCommand *>(context);
+    command->OpenCommissioningWindow();
+}
+void PairingCommand::OnDeviceConnectionFailureFn(void * context, NodeId deviceId, CHIP_ERROR error)
+{
+    PairingCommand * command = reinterpret_cast<PairingCommand *>(context);
+    ChipLogError(chipTool, "Failed in connecting to the device %" PRIu64 ". Error %" CHIP_ERROR_FORMAT, deviceId, error.Format());
+    command->SetCommandExitStatus(error);
 }
 
 CHIP_ERROR PairingCommand::PairWithQRCode(NodeId remoteId)
@@ -147,6 +172,14 @@ CHIP_ERROR PairingCommand::PairWithoutSecurity(NodeId remoteId, PeerAddress addr
 CHIP_ERROR PairingCommand::Unpair(NodeId remoteId)
 {
     CHIP_ERROR err = GetExecContext()->commissioner->UnpairDevice(remoteId);
+    SetCommandExitStatus(err);
+    return err;
+}
+
+CHIP_ERROR PairingCommand::OpenCommissioningWindow()
+{
+    CHIP_ERROR err = GetExecContext()->commissioner->OpenCommissioningWindow(GetExecContext()->remoteId, mTimeout, mIteration,
+                                                                             mDiscriminator, mCommissioningWindowOption);
     SetCommandExitStatus(err);
     return err;
 }
@@ -391,14 +424,15 @@ void PairingCommand::OnEnableNetworkResponse(void * context, uint8_t errorCode, 
 
 CHIP_ERROR PairingCommand::UpdateNetworkAddress()
 {
-    ChipLogProgress(chipTool, "Mdns: Updating NodeId: %" PRIx64 " FabricId: %" PRIx64 " ...", mRemoteId, mFabricId);
-    return GetExecContext()->commissioner->UpdateDevice(mRemoteId, mFabricId);
+    ChipLogProgress(chipTool, "Mdns: Updating NodeId: %" PRIx64 " Compressed FabricId: %" PRIx64 " ...", mRemoteId,
+                    GetExecContext()->commissioner->GetCompressedFabricId());
+    return GetExecContext()->commissioner->UpdateDevice(mRemoteId);
 }
 
 void PairingCommand::OnAddressUpdateComplete(NodeId nodeId, CHIP_ERROR err)
 {
-    ChipLogProgress(chipTool, "OnAddressUpdateComplete: %s", ErrorStr(err));
-    if (err != CHIP_NO_ERROR)
+    ChipLogProgress(chipTool, "OnAddressUpdateComplete: %" PRIx64 ": %s", nodeId, ErrorStr(err));
+    if (err != CHIP_NO_ERROR && nodeId == mRemoteId)
     {
         // Set exit status only if the address update failed.
         // Otherwise wait for OnCommissioningComplete() callback.

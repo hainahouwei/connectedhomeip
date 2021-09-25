@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
-import os
-import shutil
-
 from enum import IntEnum, auto
 
 
@@ -27,6 +23,9 @@ class Platform(IntEnum):
     EFR32 = auto()
     NRF = auto()
     ANDROID = auto()
+    INFINEON = auto()
+    TELINK = auto()
+    TIZEN = auto()
 
     @property
     def ArgName(self):
@@ -60,10 +59,17 @@ class Board(IntEnum):
     NRF52840 = auto()
     NRF5340 = auto()
 
-    # Android platform
+    # Telink platform
+    TLSR9518ADK80D = auto()
+
+    # Android, Tizen platform
     ARM = auto()
     ARM64 = auto()
     X64 = auto()
+    X86 = auto()
+
+    # Infineon board
+    P6BOARD = auto()
 
     @property
     def ArgName(self):
@@ -86,6 +92,10 @@ class Application(IntEnum):
     SHELL = auto()
     CHIP_TOOL = auto()
     BRIDGE = auto()
+    TEMPERATURE_MEASUREMENT = auto()
+    THERMOSTAT = auto()
+    PUMP = auto()
+    PUMP_CONTROLLER = auto()
 
     @property
     def ArgName(self):

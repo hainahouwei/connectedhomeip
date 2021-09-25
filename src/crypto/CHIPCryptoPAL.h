@@ -26,9 +26,10 @@
 #include <crypto/CryptoBuildConfig.h>
 #endif
 
-#include <core/CHIPError.h>
-#include <support/CodeUtils.h>
-#include <support/Span.h>
+#include <lib/core/CHIPError.h>
+#include <lib/core/CHIPVendorIdentifiers.hpp>
+#include <lib/support/CodeUtils.h>
+#include <lib/support/Span.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -229,6 +230,13 @@ public:
         memcpy(&bytes[0], &raw_value[0], N);
     }
 
+    template <size_t N>
+    constexpr P256PublicKey(const FixedByteSpan<N> & value)
+    {
+        static_assert(N == kP256_PublicKey_Length, "Can only initialize from proper sized byte span");
+        memcpy(&bytes[0], value.data(), N);
+    }
+
     SupportedECPKeyTypes Type() const override { return SupportedECPKeyTypes::ECP256R1; }
     size_t Length() const override { return kP256_PublicKey_Length; }
     operator uint8_t *() override { return bytes; }
@@ -305,7 +313,29 @@ struct alignas(size_t) P256KeypairContext
 
 typedef CapacityBoundBuffer<kP256_PublicKey_Length + kP256_PrivateKey_Length> P256SerializedKeypair;
 
-class P256Keypair : public ECPKeypair<P256PublicKey, P256ECDHDerivedSecret, P256ECDSASignature>
+class P256KeypairBase : public ECPKeypair<P256PublicKey, P256ECDHDerivedSecret, P256ECDSASignature>
+{
+public:
+    /**
+     * @brief Initialize the keypair.
+     * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
+     **/
+    virtual CHIP_ERROR Initialize() = 0;
+
+    /**
+     * @brief Serialize the keypair.
+     * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
+     **/
+    virtual CHIP_ERROR Serialize(P256SerializedKeypair & output) const = 0;
+
+    /**
+     * @brief Deserialize the keypair.
+     * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
+     **/
+    virtual CHIP_ERROR Deserialize(P256SerializedKeypair & input) = 0;
+};
+
+class P256Keypair : public P256KeypairBase
 {
 public:
     P256Keypair() {}
@@ -315,19 +345,19 @@ public:
      * @brief Initialize the keypair.
      * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
      **/
-    virtual CHIP_ERROR Initialize();
+    CHIP_ERROR Initialize() override;
 
     /**
      * @brief Serialize the keypair.
      * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
      **/
-    virtual CHIP_ERROR Serialize(P256SerializedKeypair & output) const;
+    CHIP_ERROR Serialize(P256SerializedKeypair & output) const override;
 
     /**
      * @brief Deserialize the keypair.
      * @return Returns a CHIP_ERROR on error, CHIP_NO_ERROR otherwise
      **/
-    virtual CHIP_ERROR Deserialize(P256SerializedKeypair & input);
+    CHIP_ERROR Deserialize(P256SerializedKeypair & input) override;
 
     /**
      * @brief Generate a new Certificate Signing Request (CSR).
@@ -744,6 +774,11 @@ public:
     virtual CHIP_ERROR Init(const uint8_t * context, size_t context_len);
 
     /**
+     * @brief Free Spake2+ underlying objects.
+     **/
+    virtual void Clear() = 0;
+
+    /**
      * @brief Start the Spake2+ process as a verifier (i.e. an accessory being provisioned).
      *
      * @param my_identity       The verifier identity. May be NULL if identities are not established.
@@ -1065,7 +1100,7 @@ protected:
                            size_t info_len, uint8_t * out, size_t out_len) = 0;
 
     CHIP_SPAKE2P_ROLE role;
-    CHIP_SPAKE2P_STATE state;
+    CHIP_SPAKE2P_STATE state = CHIP_SPAKE2P_STATE::PREINIT;
     size_t fe_size;
     size_t hash_size;
     size_t point_size;
@@ -1090,8 +1125,9 @@ public:
         memset(&mSpake2pContext, 0, sizeof(mSpake2pContext));
     }
 
-    ~Spake2p_P256_SHA256_HKDF_HMAC() override { FreeImpl(); }
+    ~Spake2p_P256_SHA256_HKDF_HMAC() override { Spake2p_P256_SHA256_HKDF_HMAC::Clear(); }
 
+    void Clear() override;
     CHIP_ERROR Mac(const uint8_t * key, size_t key_len, const uint8_t * in, size_t in_len, uint8_t * out) override;
     CHIP_ERROR MacVerify(const uint8_t * key, size_t key_len, const uint8_t * mac, size_t mac_len, const uint8_t * in,
                          size_t in_len) override;
@@ -1117,11 +1153,6 @@ protected:
                    size_t info_length, uint8_t * out, size_t out_length) override;
 
 private:
-    /**
-     * @brief Free any underlying implementation curve, points, field elements, etc.
-     **/
-    void FreeImpl();
-
     CHIP_ERROR InitInternal();
     Hash_SHA256_stream sha256_hash_ctx;
 
@@ -1164,6 +1195,16 @@ CHIP_ERROR ValidateCertificateChain(const uint8_t * rootCertificate, size_t root
                                     size_t caCertificateLen, const uint8_t * leafCertificate, size_t leafCertificateLen);
 
 CHIP_ERROR ExtractPubkeyFromX509Cert(const ByteSpan & certificate, Crypto::P256PublicKey & pubkey);
+
+/**
+ * @brief Extracts the Authority Key Identifier from an X509 Certificate.
+ **/
+CHIP_ERROR ExtractAKIDFromX509Cert(const ByteSpan & certificate, MutableByteSpan & akid);
+
+/**
+ * @brief Extracts the Vendor ID from an X509 Certificate.
+ **/
+CHIP_ERROR ExtractVIDFromX509Cert(const ByteSpan & certificate, VendorId & vid);
 
 } // namespace Crypto
 } // namespace chip

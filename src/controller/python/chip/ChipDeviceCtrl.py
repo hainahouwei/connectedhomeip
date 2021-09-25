@@ -27,8 +27,6 @@
 
 from __future__ import absolute_import
 from __future__ import print_function
-import time
-from threading import Thread
 from ctypes import *
 from .ChipStack import *
 from .clusters.CHIPClusters import *
@@ -113,7 +111,7 @@ class ChipDeviceController(object):
             if err != 0:
                 print("Failed to update node address: {}".format(err))
                 # Failed update address, don't wait for HandleCommissioningComplete
-                self.state = DCState.IDLEHandleCommissioningComplete
+                self.state = DCState.IDLE
                 self._ChipStack.callbackRes = err
                 self._ChipStack.completeEvent.set()
             else:
@@ -213,6 +211,12 @@ class ChipDeviceController(object):
 
         return (address.value.decode(), port.value) if error == 0 else None
 
+    def CommissioningComplete(self, nodeid):
+        return self._ChipStack.Call(
+            lambda: self._dmLib.pychip_DeviceController_CommissioningComplete(
+                self.devCtrl, nodeid)
+        )
+
     def DiscoverCommissionableNodesLongDiscriminator(self, long_discriminator):
         return self._ChipStack.Call(
             lambda: self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesLongDiscriminator(
@@ -237,15 +241,9 @@ class ChipDeviceController(object):
                 self.devCtrl, device_type)
         )
 
-    def DiscoverCommissionableNodesCommissioningEnabled(self, enabled):
+    def DiscoverCommissionableNodesCommissioningEnabled(self):
         return self._ChipStack.Call(
             lambda: self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabled(
-                self.devCtrl, enabled)
-        )
-
-    def DiscoverCommissionableNodesCommissioningEnabledFromCommand(self):
-        return self._ChipStack.Call(
-            lambda: self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabledFromCommand(
                 self.devCtrl)
         )
 
@@ -273,6 +271,28 @@ class ChipDeviceController(object):
             lambda: self._dmLib.pychip_DeviceController_DiscoverAllCommissionableNodes(
                 self.devCtrl)
         )
+
+    def OpenCommissioningWindow(self, nodeid, timeout, iteration, discriminator, option):
+        res = self._ChipStack.Call(
+            lambda: self._dmLib.pychip_DeviceController_OpenCommissioningWindow(
+                self.devCtrl, nodeid, timeout, iteration, discriminator, option)
+        )
+
+        if res != 0:
+            raise self._ChipStack.ErrorToException(res)
+
+    def GetCompressedFabricId(self):
+        fabricid = c_uint64(0)
+
+        res = self._ChipStack.Call(
+            lambda: self._dmLib.pychip_DeviceController_GetCompressedFabricId(
+                self.devCtrl, pointer(fabricid))
+        )
+
+        if res == 0:
+            return fabricid.value
+        else:
+            raise self._ChipStack.ErrorToException(res)
 
     def GetFabricId(self):
         fabricid = c_uint64(0)
@@ -415,12 +435,8 @@ class ChipDeviceController(object):
             self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesDeviceType.restype = c_uint32
 
             self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabled.argtypes = [
-                c_void_p, c_uint16]
-            self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabled.restype = c_uint32
-
-            self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabledFromCommand.argtypes = [
                 c_void_p]
-            self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabledFromCommand.restype = c_uint32
+            self._dmLib.pychip_DeviceController_DiscoverCommissionableNodesCommissioningEnabled.restype = c_uint32
 
             self._dmLib.pychip_DeviceController_PrintDiscoveredDevices.argtypes = [
                 c_void_p]
@@ -472,6 +488,10 @@ class ChipDeviceController(object):
             self._dmLib.pychip_GetCommandSenderHandle.argtypes = [c_void_p]
             self._dmLib.pychip_GetCommandSenderHandle.restype = c_uint64
 
-            self._dmLib.pychip_DeviceController_GetFabricId.argtypes = [
+            self._dmLib.pychip_DeviceController_GetCompressedFabricId.argtypes = [
                 c_void_p, POINTER(c_uint64)]
-            self._dmLib.pychip_DeviceController_GetFabricId.restype = c_uint32
+            self._dmLib.pychip_DeviceController_GetCompressedFabricId.restype = c_uint32
+
+            self._dmLib.pychip_DeviceController_OpenCommissioningWindow.argtypes = [
+                c_void_p, c_uint64, c_uint16, c_uint16, c_uint16, c_uint8]
+            self._dmLib.pychip_DeviceController_OpenCommissioningWindow.restype = c_uint32
