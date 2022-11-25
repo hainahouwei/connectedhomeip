@@ -74,24 +74,48 @@ jobs:
               run: |
                   ./scripts/run_in_build_env.sh \
                     "./scripts/build/build_examples.py --no-log-timestamps --target android-arm-chip-tool build"
+            - name : upload apk
+              uses: actions/upload-artifact@v3.1.1
+              if: always()
+              with:
+               name: arm-chip-tool
+               path: ./out  
             - name: Clean out build output
               run: rm -rf ./out
             - name: Build Android arm-tv-casting-app
               run: |
                   ./scripts/run_in_build_env.sh \
                     "./scripts/build/build_examples.py --no-log-timestamps --target android-arm-tv-casting-app build"
+            - name : upload arm-tv-casting-app
+              uses: actions/upload-artifact@v3.1.1
+              if: always()
+              with:
+               name: arm-tv-casting-app
+               path: ./out 
             - name: Clean out build output
               run: rm -rf ./out
             - name: Build Android arm-tv-server
               run: |
                   ./scripts/run_in_build_env.sh \
                     "./scripts/build/build_examples.py --no-log-timestamps --target android-arm-tv-server build"
+            - name : upload arm-tv-server
+              uses: actions/upload-artifact@v3.1.1
+              if: always()
+              with:
+               name: arm-tv-server
+               path: ./out 
             - name: Clean out build output
               run: rm -rf ./out
             - name: Build Android arm64-tv-casting-app
               run: |
                   ./scripts/run_in_build_env.sh \
                     "./scripts/build/build_examples.py --no-log-timestamps --target android-arm64-tv-casting-app build"
+            - name : upload arm64-tv-casting-app
+              uses: actions/upload-artifact@v3.1.1
+              if: always()
+              with:
+               name: arm64-tv-casting-app
+               path: ./out 
             - name: Clean out build output
               run: rm -rf ./out
             - name: Build Android arm64-tv-server
@@ -106,6 +130,12 @@ jobs:
               run: |
                   ./scripts/run_in_build_env.sh \
                     "ninja -C out/android-arm64-chip-tool build/chip/java/tests:java_build_test"
+            - name : upload Android build rule tests
+              uses: actions/upload-artifact@v3.1.1
+              if: always()
+              with:
+               name: Android build rule tests
+               path: ./out 
             - name: Clean out build output
               run: rm -rf ./out
             # - name: Build Android Studio build (arm64 only)
