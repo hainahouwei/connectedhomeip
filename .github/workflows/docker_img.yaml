@@ -14,15 +14,17 @@
 
 name: Docker CHIP images
 
+# on:
+#     push:
+#         paths:
+#             - "integrations/docker/images/**"
+#     pull_request:
+#         paths:
+#             - "integrations/docker/images/**"
+#     workflow_dispatch:
 on:
     push:
-        paths:
-            - "integrations/docker/images/**"
     pull_request:
-        paths:
-            - "integrations/docker/images/**"
-    workflow_dispatch:
-
 jobs:
     build_images:
         name: Build Docker CHIP Build images
